@@ -1,40 +1,54 @@
-import { useFocusEffect, router } from "expo-router";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { router } from "expo-router";
+import { useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import * as Network from "expo-network";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AppState, Image, Linking, Pressable, Text, View } from "react-native";
+import { Alert, AppState, Image, Linking, Platform, Text, View } from "react-native";
 import { Button, Card, PageTitle, Pill, Screen } from "../../components/ui";
 import { theme } from "../../constants/theme";
 import { ApiError, uploadAnalysis } from "../../services/api/client";
-import { discardLocalImage, enqueueAnalysis, listPendingAnalyses, persistRetryImage } from "../../features/offline/pending-queue";
+import { discardLocalImage } from "../../features/images/temp-files";
 
-async function compressImage(uri: string) {
-  const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => Image.getSize(uri, (width, height) => resolve({ width, height }), reject));
-  const resize = dimensions.width >= dimensions.height ? { width: 1600 } : { height: 1600 };
-  const result = await ImageManipulator.manipulateAsync(uri, [{ resize }], { format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 });
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+async function compressImage(uri: string, assetWidth?: number, assetHeight?: number) {
+  let width = assetWidth;
+  let height = assetHeight;
+  if (!width || !height) {
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) =>
+        Image.getSize(uri, (imageWidth, imageHeight) => resolve({ width: imageWidth, height: imageHeight }), reject)
+      );
+      width = dimensions.width;
+      height = dimensions.height;
+    } catch {
+      // Keep the original dimensions if Android returns a content URI Image.getSize cannot resolve.
+    }
+  }
+
+  const resize = width && height
+    ? (width >= height ? { width: 1600 } : { height: 1600 })
+    : undefined;
+  const result = await ImageManipulator.manipulateAsync(
+    uri,
+    resize ? [{ resize }] : [],
+    { format: ImageManipulator.SaveFormat.JPEG, compress: 0.82 }
+  );
   const info = await FileSystem.getInfoAsync(result.uri);
-  if (!info.exists || (info.size ?? 0) > 8 * 1024 * 1024) throw new Error("A foto ficou acima de 8 MB. Tente outra imagem.");
+  if (!info.exists || (info.size !== undefined && info.size > MAX_IMAGE_BYTES)) {
+    await discardLocalImage(result.uri);
+    throw new Error("A foto precisa ficar abaixo de 8 MB. Tente uma imagem menor.");
+  }
   return result.uri;
 }
 
 export default function ScannerScreen() {
-  const camera = useRef<CameraView>(null);
   const [permission, requestPermission, getPermission] = useCameraPermissions();
-  const [permissionWorking, setPermissionWorking] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [cameraActive, setCameraActive] = useState(true);
-  const [torch, setTorch] = useState(false);
   const [working, setWorking] = useState(false);
+  const [permissionWorking, setPermissionWorking] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
-  const [pendingCount, setPendingCount] = useState(0);
-
-  useFocusEffect(useCallback(() => {
-    setCameraActive(true);
-    return () => setCameraActive(false);
-  }, []));
+  const pendingResultChecked = useRef(false);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
@@ -43,37 +57,57 @@ export default function ScannerScreen() {
     return () => subscription.remove();
   }, [getPermission]);
 
-  const refreshQueue = useCallback(async () => setPendingCount((await listPendingAnalyses()).length), []);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- Queue state loads from AsyncStorage after mount.
-  useEffect(() => { void refreshQueue(); }, [refreshQueue]);
-
-  const setImage = async (uri: string) => {
+  const setImage = useCallback(async (uri: string, width?: number, height?: number) => {
     setWorking(true);
     try {
-      const nextUri = await compressImage(uri);
-      if (previewUri) await discardLocalImage(previewUri);
+      const nextUri = await compressImage(uri, width, height);
+      if (previewUri && previewUri !== uri) await discardLocalImage(previewUri);
       setPreviewUri(nextUri);
+    } catch (error: any) {
+      Alert.alert("Não foi possível abrir esta foto", error?.message ?? "Escolha outra imagem e tente novamente.");
+    } finally {
+      setWorking(false);
     }
-    catch (error: any) { Alert.alert("Não foi possível usar esta foto", error?.message ?? "Tente outra imagem."); }
-    finally { setWorking(false); }
-  };
+  }, [previewUri]);
 
-  const takePicture = async () => {
-    if (!camera.current || !cameraReady) return;
-    setWorking(true);
-    try {
-      const photo = await camera.current.takePictureAsync({ quality: 0.92, exif: false });
-      await setImage(photo.uri);
-      await discardLocalImage(photo.uri);
-    } catch (error: any) { Alert.alert("Câmera indisponível", error?.message ?? "Tente novamente."); }
-    finally { setWorking(false); }
-  };
+  const acceptPickerResult = useCallback(async (result: ImagePicker.ImagePickerResult) => {
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (!asset?.uri) {
+      Alert.alert("Foto indisponível", "O Android não retornou a imagem. Tente selecionar outra.");
+      return;
+    }
+    await setImage(asset.uri, asset.width, asset.height);
+  }, [setImage]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || pendingResultChecked.current) return;
+    pendingResultChecked.current = true;
+    let mounted = true;
+    void ImagePicker.getPendingResultAsync().then(async (result) => {
+      if (!mounted || !result) return;
+      if ("code" in result) {
+        Alert.alert("Não foi possível recuperar a seleção", result.message || "Abra a galeria e escolha a foto novamente.");
+        return;
+      }
+      await acceptPickerResult(result);
+    }).catch((error: any) => {
+      if (mounted) Alert.alert("Galeria indisponível", error?.message ?? "Tente selecionar a imagem novamente.");
+    });
+    return () => { mounted = false; };
+  }, [acceptPickerResult]);
 
   const choosePhoto = async () => {
+    if (working || permissionWorking) return;
+    setWorking(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, quality: 1 });
-      if (!result.canceled && result.assets[0]?.uri) await setImage(result.assets[0].uri);
-    } catch (error: any) { Alert.alert("Galeria indisponível", error?.message ?? "Verifique a permissão para suas fotos."); }
+      await acceptPickerResult(result);
+    } catch (error: any) {
+      Alert.alert("Galeria indisponível", error?.message ?? "Tente selecionar a imagem novamente.");
+    } finally {
+      setWorking(false);
+    }
   };
 
   const openSettings = async () => {
@@ -81,96 +115,110 @@ export default function ScannerScreen() {
     catch { Alert.alert("Configurações indisponíveis", "Abra as configurações do Android e permita o acesso à câmera para o RADAR."); }
   };
 
-  const handleCameraPermission = async () => {
-    if (!permission) return;
-    if (!permission.canAskAgain) {
-      await openSettings();
-      return;
-    }
+  const openCamera = async () => {
+    if (!permission || working || permissionWorking) return;
     setPermissionWorking(true);
     try {
-      const result = await requestPermission();
-      if (!result.granted && !result.canAskAgain) {
-        Alert.alert("Acesso à câmera bloqueado", "Permita o acesso à câmera nas configurações do Android para fotografar produtos.", [
-          { text: "Agora não", style: "cancel" },
-          { text: "Abrir configurações", onPress: () => { void openSettings(); } },
-        ]);
+      let access = permission;
+      if (!access.granted && !access.canAskAgain) {
+        await openSettings();
+        return;
       }
-    } catch {
-      Alert.alert("Não foi possível solicitar a permissão", "Abra as configurações do Android para permitir o acesso à câmera.", [
-        { text: "Agora não", style: "cancel" },
-        { text: "Abrir configurações", onPress: () => { void openSettings(); } },
-      ]);
-    } finally { setPermissionWorking(false); }
+      if (!access.granted) access = await requestPermission();
+      if (!access.granted) {
+        Alert.alert("Permissão necessária", access.canAskAgain
+          ? "Permita o acesso à câmera para fotografar o produto. A galeria continua disponível."
+          : "Abra as configurações do RADAR e permita o acesso à câmera.", access.canAskAgain ? undefined : [
+            { text: "Agora não", style: "cancel" },
+            { text: "Abrir configurações", onPress: () => { void openSettings(); } },
+          ]);
+        return;
+      }
+
+      setWorking(true);
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], allowsEditing: false, quality: 1, exif: false });
+      await acceptPickerResult(result);
+    } catch (error: any) {
+      Alert.alert("Câmera indisponível", error?.message ?? "Não foi possível abrir a câmera deste aparelho.");
+    } finally {
+      setPermissionWorking(false);
+      setWorking(false);
+    }
   };
 
   const analyzePhoto = async () => {
-    if (!previewUri) return;
+    if (!previewUri || working) return;
     const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setWorking(true);
     try {
-      const network = await Network.getNetworkStateAsync();
-      if (!network.isConnected || network.isInternetReachable === false) {
-        await enqueueAnalysis(previewUri, idempotencyKey);
-        await discardLocalImage(previewUri);
-        setPreviewUri(null);
-        await refreshQueue();
-        Alert.alert("Foto salva no dispositivo", "O RADAR enviará a análise quando a conexão voltar.");
-        return;
-      }
       const response = await uploadAnalysis(previewUri, idempotencyKey);
       const analysis = response.data.analysis;
-      let retryImageUri: string | undefined;
-      if (analysis.status === "failed") retryImageUri = await persistRetryImage(previewUri, `retry-${analysis.id}`);
+      if (analysis.status === "failed") {
+        router.push({ pathname: "/analysis/[id]", params: { id: analysis.id, retryImageUri: previewUri } });
+        setPreviewUri(null);
+        return;
+      }
       await discardLocalImage(previewUri);
       setPreviewUri(null);
-      router.push({ pathname: "/analysis/[id]", params: { id: analysis.id, retryImageUri } });
+      router.push({ pathname: "/analysis/[id]", params: { id: analysis.id } });
     } catch (error: any) {
       if (error instanceof ApiError && error.code === "NETWORK_ERROR") {
-        await enqueueAnalysis(previewUri, idempotencyKey);
-        await discardLocalImage(previewUri);
-        setPreviewUri(null);
-        await refreshQueue();
-        Alert.alert("Sem conexão com o backend", "A fotografia ficou na fila local e será enviada quando a conexão voltar.");
-      } else Alert.alert("A análise não foi enviada", error?.message ?? "Tente novamente.");
-    } finally { setWorking(false); }
+        Alert.alert("Sem conexão com o backend", "Conecte-se à internet e toque em “Analisar produto” novamente. A foto continua apenas nesta prévia temporária.");
+      } else {
+        Alert.alert("A análise não foi enviada", error?.message ?? "Confira sua conexão e tente novamente.");
+      }
+    } finally {
+      setWorking(false);
+    }
   };
 
-  if (!permission) return <Screen><PageTitle title="Scanner" subtitle="Verificando permissão para acessar a câmera…" /></Screen>;
-  if (!permission.granted && !previewUri) return <Screen>
-    <PageTitle eyebrow="RADAR SCANNER" title="A câmera começa a busca" subtitle="Dê permissão para fotografar. Você também pode escolher uma imagem da galeria." />
-    <Card><Text style={{ color: theme.colors.muted, lineHeight: 21 }}>O RADAR envia a foto ao backend para identificação. O backend mantém somente os dados da análise e descarta a foto temporária.</Text>
-      {!permission.canAskAgain ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>A permissão da câmera está bloqueada pelo Android. Abra as configurações do app para liberá-la; a galeria continua disponível sem essa permissão.</Text> : null}
-      <Button title={permission.canAskAgain ? "Permitir câmera" : "Abrir configurações"} onPress={() => void handleCameraPermission()} loading={permissionWorking} />
-      <Button title="Escolher da galeria" variant="secondary" onPress={() => void choosePhoto()} loading={working} />
-    </Card>
-  </Screen>;
+  const cameraTitle = !permission
+    ? "Verificando câmera…"
+    : permission.granted
+      ? "Fotografar produto"
+      : permission.canAskAgain
+        ? "Permitir e fotografar"
+        : "Abrir configurações";
 
   return <Screen contentStyle={{ gap: 16 }}>
-    <PageTitle eyebrow="GARIMPO INTELIGENTE" title="Aponte. Investigue." subtitle="Fotografe o produto para descobrir se vale a revenda. A câmera só inicia nesta tela." right={pendingCount > 0 ? <Pill label={`${pendingCount} PENDENTE${pendingCount === 1 ? "" : "S"}`} tone="amber" /> : undefined} />
+    <PageTitle
+      eyebrow="GARIMPO INTELIGENTE"
+      title={previewUri ? "Confira a foto" : "Fotografe ou selecione"}
+      subtitle={previewUri
+        ? "A imagem será enviada ao backend para identificar o produto."
+        : "Use a câmera do celular ou escolha uma foto para descobrir se o produto vale a revenda."}
+    />
 
-    <View style={{ height: 390, borderRadius: 24, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, position: "relative" }}>
-      {previewUri ? <Image source={{ uri: previewUri }} resizeMode="cover" style={{ width: "100%", height: "100%" }} /> : <CameraView ref={camera} active={cameraActive} facing="back" enableTorch={torch} onCameraReady={() => setCameraReady(true)} style={{ flex: 1 }} />}
-      {!previewUri ? <>
-        <View pointerEvents="none" style={{ position: "absolute", top: "18%", bottom: "18%", left: "13%", right: "13%", borderColor: `${theme.colors.green}C0`, borderWidth: 1, borderRadius: 18 }} />
-        <View pointerEvents="none" style={{ position: "absolute", top: 17, left: 16, backgroundColor: "#061008B8", borderRadius: 99, paddingHorizontal: 12, paddingVertical: 7 }}><Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: "700" }}>ENQUADRE O PRODUTO</Text></View>
-        <Pressable onPress={() => setTorch((value) => !value)} style={{ position: "absolute", top: 15, right: 15, backgroundColor: "#061008B8", padding: 11, borderRadius: 99 }}><Text style={{ color: torch ? theme.colors.green : theme.colors.text, fontSize: 16 }}>ϟ</Text></Pressable>
-      </> : <View style={{ position: "absolute", left: 12, top: 12 }}><Pill label="PRÉVIA" /></View>}
+    <View style={{ height: 300, borderRadius: 24, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, alignItems: "center", justifyContent: "center" }}>
+      {previewUri ? <>
+        <Image source={{ uri: previewUri }} resizeMode="cover" style={{ width: "100%", height: "100%" }} />
+        <View style={{ position: "absolute", left: 12, top: 12 }}><Pill label="PRÉVIA TEMPORÁRIA" /></View>
+      </> : <View style={{ alignItems: "center", gap: 12, padding: 24 }}>
+        <Text style={{ color: theme.colors.green, fontSize: 64 }}>⌖</Text>
+        <Text style={{ color: theme.colors.text, fontSize: 17, fontWeight: "800", textAlign: "center" }}>Sua próxima oportunidade começa com uma foto</Text>
+        <Text style={{ color: theme.colors.muted, lineHeight: 21, textAlign: "center" }}>As imagens são usadas somente durante a análise e não ficam no histórico.</Text>
+      </View>}
     </View>
 
-    {!previewUri ? <View style={{ flexDirection: "row", gap: 12 }}>
-      <Button title="▧  Galeria" variant="secondary" onPress={() => void choosePhoto()} style={{ flex: 1 }} />
-      <Button title="◉  Fotografar" onPress={() => void takePicture()} loading={working} disabled={!cameraReady} style={{ flex: 1.2 }} />
-    </View> : <View style={{ flexDirection: "row", gap: 12 }}>
-      <Button title="Refazer" variant="secondary" onPress={() => { void discardLocalImage(previewUri); setPreviewUri(null); }} style={{ flex: 1 }} />
-      <Button title="Analisar produto" onPress={() => void analyzePhoto()} loading={working} style={{ flex: 1.5 }} />
+    {!previewUri ? <>
+      <View style={{ flexDirection: "row", gap: 12 }}>
+        <Button title="▧  Galeria" variant="secondary" onPress={() => void choosePhoto()} loading={working} style={{ flex: 1 }} />
+        <Button title={`◉  ${cameraTitle}`} onPress={() => void openCamera()} loading={permissionWorking || working} disabled={!permission} style={{ flex: 1.35 }} />
+      </View>
+      {!permission?.granted ? <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18, textAlign: "center" }}>
+        {permission?.canAskAgain === false
+          ? "A câmera está bloqueada nas permissões do Android. Você ainda pode escolher uma foto da galeria."
+          : "Ao tocar em “Permitir e fotografar”, o RADAR solicita a permissão e abre a câmera do aparelho."}
+      </Text> : null}
+    </> : <View style={{ flexDirection: "row", gap: 12 }}>
+      <Button title="Escolher outra foto" variant="secondary" onPress={() => { void discardLocalImage(previewUri); setPreviewUri(null); }} style={{ flex: 1 }} />
+      <Button title="Analisar produto" onPress={() => void analyzePhoto()} loading={working} style={{ flex: 1.25 }} />
     </View>}
 
     <Card style={{ gap: 9 }}>
-      <Text style={{ color: theme.colors.text, fontWeight: "800", fontSize: 14 }}>Dicas para uma boa identificação</Text>
-      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Mostre o produto inteiro, aproxime a marca e a etiqueta. Fotografe defeitos visíveis. O funcionamento precisa ser confirmado por você.</Text>
-      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}><Pill label="UMA FOTO" /><Pill label="ATÉ 8 MB" tone="muted" /><Pill label="JPEG · PNG · WEBP" tone="muted" /></View>
+      <Text style={{ color: theme.colors.text, fontWeight: "800", fontSize: 14 }}>O que acontece depois</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>O backend identifica o produto com IA e consulta referências de mercado. Você confirma a identificação antes de ver estimativa de revenda, lucro e recomendação.</Text>
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}><Pill label="ATÉ 8 MB" tone="muted" /><Pill label="JPEG · PNG · WEBP" tone="muted" /><Pill label="SEM FOTO NO HISTÓRICO" /></View>
     </Card>
   </Screen>;
 }
-

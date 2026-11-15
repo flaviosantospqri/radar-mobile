@@ -6,7 +6,7 @@ import { Button, Card, Divider, Field, PageTitle, Pill, Screen } from "../../com
 import { money, parseMoneyToCents, percent, theme } from "../../constants/theme";
 import type { AnalysisResult } from "../../types/api";
 import { createOpportunity, confirmIdentification, fetchAnalysis, recalculateAnalysis, researchAnalysis, retryIdentification } from "../../services/api/client";
-import { discardLocalImage } from "../../features/offline/pending-queue";
+import { discardLocalImage } from "../../features/images/temp-files";
 
 const scenarios = ["conservador", "provavel", "otimista"] as const;
 type Scenario = typeof scenarios[number];
@@ -36,6 +36,8 @@ export default function AnalysisDetailScreen() {
   const [fee, setFee] = useState("0");
   const [scenario, setScenario] = useState<Scenario>("provavel");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => () => { if (retryImageUri) void discardLocalImage(retryImageUri); }, [retryImageUri]);
 
   useEffect(() => {
     if (!product) return;

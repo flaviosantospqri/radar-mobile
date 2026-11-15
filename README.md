@@ -13,7 +13,9 @@ npx expo start
 
 ## Imagens
 
-As imagens selecionadas são enviadas ao backend por `multipart/form-data`. O mobile não chama o Gemini e não usa Firebase Storage nem Cloudflare R2. O backend descarta a cópia temporária após a identificação; a API devolve dados estruturados e o histórico não contém a fotografia original.
+As imagens selecionadas ou fotografadas são mantidas apenas temporariamente no cache do aparelho enquanto a análise é enviada. O mobile envia por `multipart/form-data`, não chama o Gemini e não usa Firebase Storage nem Cloudflare R2. O backend descarta a cópia temporária após a identificação; a API e o histórico guardam somente os dados estruturados, nunca a fotografia. Sem conexão, a imagem não entra em uma fila persistente: conecte-se e tente novamente enquanto ela ainda estiver na prévia.
+
+No Android, a galeria usa o seletor do sistema e recupera a seleção se o sistema recriar a atividade do app. A captura abre a câmera nativa do aparelho; o app solicita a permissão de câmera e devolve a foto à prévia para análise.
 
 ## Build Android
 

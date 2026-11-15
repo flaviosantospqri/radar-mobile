@@ -1,10 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Network from "expo-network";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Alert } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest, clearToken, login as loginRequest, logoutRequest, readToken, register as registerRequest, type User } from "../../services/api/client";
-import { cleanupExpiredRetryImages, syncPendingAnalyses } from "../offline/pending-queue";
+import { cleanupLegacyImageQueue } from "../images/temp-files";
 
 const USER_CACHE_KEY = "radar.cachedUser";
 type AuthContextValue = {
@@ -22,7 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    void cleanupExpiredRetryImages();
+    void cleanupLegacyImageQueue();
     const restore = async () => {
       const token = await readToken();
       if (!token) { if (active) setReady(true); return; }
@@ -43,23 +41,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void restore();
     return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    const synchronize = async () => {
-      const result = await syncPendingAnalyses();
-      if (result.synced > 0) {
-        queryClient.invalidateQueries({ queryKey: ["history"] });
-        Alert.alert("Sincronização concluída", `${result.synced} análise(s) enviada(s). Consulte o histórico para continuar.`);
-      }
-      if (result.expired > 0) Alert.alert("Fila expirada", `${result.expired} imagem(ns) local(is) com mais de 30 dias foram removidas.`);
-    };
-    void synchronize();
-    const subscription = Network.addNetworkStateListener((state) => {
-      if (state.isConnected && state.isInternetReachable !== false) void synchronize();
-    });
-    return () => subscription.remove();
-  }, [user, queryClient]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user, ready,

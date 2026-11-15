@@ -71,8 +71,8 @@ export default function SettingsScreen() {
       <View><Text style={{ color: theme.colors.text, fontWeight: "800" }}>{user?.name ?? "Conta RADAR"}</Text><Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 4 }}>{user?.email}</Text></View>
       <Pill label="CONTA PESSOAL" tone="blue" />
     </Card>
-    <Button title="Sair da conta" variant="danger" onPress={() => Alert.alert("Sair da conta?", "Sua fila offline ficará neste dispositivo.", [{ text: "Cancelar", style: "cancel" }, { text: "Sair", style: "destructive", onPress: () => void logout() }])} />
-    <Text style={{ color: theme.colors.faint, fontSize: 11, textAlign: "center" }}>Radar • Brasil • valores em BRL • fotos locais por até 30 dias quando pendentes</Text>
+    <Button title="Sair da conta" variant="danger" onPress={() => Alert.alert("Sair da conta?", "Você poderá entrar novamente com seu e-mail e senha.", [{ text: "Cancelar", style: "cancel" }, { text: "Sair", style: "destructive", onPress: () => void logout() }])} />
+    <Text style={{ color: theme.colors.faint, fontSize: 11, textAlign: "center" }}>Radar • Brasil • valores em BRL • imagens não são salvas no histórico</Text>
   </Screen>;
 }
 
