@@ -163,7 +163,7 @@ export default function ScannerScreen() {
       router.push({ pathname: "/analysis/[id]", params: { id: analysis.id } });
     } catch (error: any) {
       if (error instanceof ApiError && error.code === "NETWORK_ERROR") {
-        Alert.alert("Sem conexão com o backend", "Conecte-se à internet e toque em “Analisar produto” novamente. A foto continua apenas nesta prévia temporária.");
+        Alert.alert("O envio da foto falhou", `${error.message}. Confira a conexão e tente novamente. A foto continua apenas nesta prévia temporária.`);
       } else {
         Alert.alert("A análise não foi enviada", error?.message ?? "Confira sua conexão e tente novamente.");
       }

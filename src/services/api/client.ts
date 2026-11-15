@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import { File, UploadType } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 import type { AnalysisResult, Settings } from "../../types/api";
 
@@ -21,7 +22,10 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}, aut
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   let response: Response;
   try { response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers }); }
-  catch { throw new ApiError("Não foi possível conectar ao RADAR. Verifique sua internet.", 0, "NETWORK_ERROR"); }
+  catch (error) {
+    const detail = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new ApiError(`Falha de comunicação com o RADAR${detail}`, 0, "NETWORK_ERROR");
+  }
   if (response.status === 204) return undefined as T;
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(payload?.error?.message ?? `Falha na solicitação (${response.status}).`, response.status, payload?.error?.code);
@@ -42,20 +46,43 @@ export async function register(name: string, email: string, password: string) {
 
 export type User = { id: string; name: string; email: string };
 
-export async function uploadAnalysis(uri: string, clientRequestId: string, askingPriceCents?: number) {
-  const form = new FormData();
-  form.append("image", { uri, name: "radar-product.jpg", type: "image/jpeg" } as any);
-  if (askingPriceCents !== undefined) form.append("askingPriceCents", String(askingPriceCents));
-  return apiRequest<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] }; idempotentReplay?: boolean }>("/analyses", {
-    method: "POST", body: form, headers: { "Idempotency-Key": clientRequestId },
-  });
+async function uploadMultipart<T>(path: string, uri: string, headers: Record<string, string>, parameters?: Record<string, string>) {
+  const token = await readToken();
+  const uploadHeaders = { ...headers };
+  if (token) uploadHeaders.Authorization = `Bearer ${token}`;
+  let response;
+  try {
+    response = await new File(uri).upload(`${API_BASE_URL}${path}`, {
+      httpMethod: "POST",
+      uploadType: UploadType.MULTIPART,
+      fieldName: "image",
+      mimeType: "image/jpeg",
+      headers: uploadHeaders,
+      parameters,
+    });
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new ApiError(`O envio da imagem falhou${detail}`, 0, "NETWORK_ERROR");
+  }
+
+  if (response.status === 204) return undefined as T;
+  let payload: any;
+  try { payload = JSON.parse(response.body || "null"); }
+  catch { throw new ApiError("O backend retornou uma resposta inválida ao receber a imagem.", response.status, "INVALID_RESPONSE"); }
+  if (response.status < 200 || response.status >= 300) {
+    throw new ApiError(payload?.error?.message ?? `Falha na solicitação (${response.status}).`, response.status, payload?.error?.code);
+  }
+  return payload as T;
 }
 
-export const retryIdentification = (id: string, uri: string) => {
-  const form = new FormData();
-  form.append("image", { uri, name: "radar-product.jpg", type: "image/jpeg" } as any);
-  return apiRequest<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] } }>(`/analyses/${id}/identify`, { method: "POST", body: form });
-};
+export async function uploadAnalysis(uri: string, clientRequestId: string, askingPriceCents?: number) {
+  const parameters = askingPriceCents === undefined ? undefined : { askingPriceCents: String(askingPriceCents) };
+  return uploadMultipart<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] }; idempotentReplay?: boolean }>(
+    "/analyses", uri, { "Idempotency-Key": clientRequestId }, parameters
+  );
+}
+
+export const retryIdentification = (id: string, uri: string) => uploadMultipart<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] } }>(`/analyses/${id}/identify`, uri, {});
 export const fetchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult }>(`/analyses/${id}`);
 export const confirmIdentification = (id: string, body: Record<string, unknown>) => apiRequest<{ data: unknown }>(`/analyses/${id}/confirm-identification`, { method: "POST", body: JSON.stringify(body) });
 export const researchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult; partial?: boolean }>(`/analyses/${id}/research`, { method: "POST", body: JSON.stringify({}) });
