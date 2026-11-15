@@ -4,7 +4,7 @@ Aplicativo Android com React Native, Expo, TypeScript e Expo Router, mantido em 
 
 ## Configuração local
 
-Requer Node.js e Android Studio/SDK ou um development build Expo compatível. Copie `.env.example` para `.env` e defina `EXPO_PUBLIC_API_URL`. O endereço `10.0.2.2` funciona no emulador Android; em aparelho físico, use o IP local do computador que executa o backend.
+Requer Node.js e Android Studio/SDK ou um development build Expo compatível. Copie `.env.example` para `.env` e defina `EXPO_PUBLIC_API_URL`. O valor padrão aponta para o backend hospedado no Render. Para executar o backend localmente, use `http://10.0.2.2:4000/api/v1` no emulador Android ou o IP acessível do computador em um aparelho físico.
 
 ```powershell
 npm install
@@ -19,5 +19,5 @@ As imagens selecionadas são enviadas ao backend por `multipart/form-data`. O mo
 
 O perfil `preview` em `eas.json` gera um APK instalável com `npx eas-cli build --platform android --profile preview`. O perfil `production` gera um Android App Bundle.
 
-O arquivo `RADAR-preview-arm64.apk` incluído neste repositório é uma build local de validação para arm64, assinada pela chave Android de debug. Para usar o backend local, configure `EXPO_PUBLIC_API_URL` antes de gerar outra build; `10.0.2.2` funciona no emulador, enquanto aparelho físico precisa de um endereço acessível na rede. Essa assinatura de debug não é adequada para publicação na Play Store.
+Configure `EXPO_PUBLIC_API_URL` no ambiente usado pelo build antes de gerar o APK. O valor é incorporado ao app, então uma mudança de servidor exige nova build. Builds locais de validação são assinadas pela chave Android de debug e não servem para publicação na Play Store.
 

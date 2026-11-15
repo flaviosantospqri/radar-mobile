@@ -3,7 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import type { AnalysisResult, Settings } from "../../types/api";
 
 const configuredBase = process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl;
-export const API_BASE_URL = (configuredBase || "http://10.0.2.2:4000/api/v1").replace(/\/$/, "");
+export const API_BASE_URL = (configuredBase || "https://radar-backend-utwm.onrender.com/api/v1").replace(/\/$/, "");
 const TOKEN_KEY = "radar.accessToken";
 
 export class ApiError extends Error {
