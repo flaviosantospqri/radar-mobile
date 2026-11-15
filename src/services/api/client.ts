@@ -1,5 +1,4 @@
 import Constants from "expo-constants";
-import { File, UploadType } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 import type { AnalysisResult, Settings } from "../../types/api";
 
@@ -46,43 +45,44 @@ export async function register(name: string, email: string, password: string) {
 
 export type User = { id: string; name: string; email: string };
 
-async function uploadMultipart<T>(path: string, uri: string, headers: Record<string, string>, parameters?: Record<string, string>) {
-  const token = await readToken();
-  const uploadHeaders = { ...headers };
-  if (token) uploadHeaders.Authorization = `Bearer ${token}`;
-  let response;
-  try {
-    response = await new File(uri).upload(`${API_BASE_URL}${path}`, {
-      httpMethod: "POST",
-      uploadType: UploadType.MULTIPART,
-      fieldName: "image",
-      mimeType: "image/jpeg",
-      headers: uploadHeaders,
-      parameters,
-    });
-  } catch (error) {
-    const detail = error instanceof Error && error.message ? `: ${error.message}` : "";
-    throw new ApiError(`O envio da imagem falhou${detail}`, 0, "NETWORK_ERROR");
-  }
+export type LiveIdentification = {
+  name: string;
+  category: string | null;
+  subcategory: string | null;
+  brand: string | null;
+  model: string | null;
+  version: string | null;
+  description: string | null;
+  attributes: Record<string, unknown>;
+  visibleCondition: string | null;
+  visibleDefects: string[];
+  confidence: number;
+  identifiedInformation: string[];
+  uncertainInformation: string[];
+  verificationQuestions: string[];
+  searchQueries: string[];
+  warnings: string[];
+};
 
-  if (response.status === 204) return undefined as T;
-  let payload: any;
-  try { payload = JSON.parse(response.body || "null"); }
-  catch { throw new ApiError("O backend retornou uma resposta inválida ao receber a imagem.", response.status, "INVALID_RESPONSE"); }
-  if (response.status < 200 || response.status >= 300) {
-    throw new ApiError(payload?.error?.message ?? `Falha na solicitação (${response.status}).`, response.status, payload?.error?.code);
-  }
-  return payload as T;
-}
+export type GeminiLiveSession = {
+  token: string;
+  model: string;
+  setup: {
+    generationConfig: {
+      responseModalities: string[];
+      temperature: number;
+      maxOutputTokens: number;
+      mediaResolution: "MEDIA_RESOLUTION_LOW";
+    };
+    systemInstruction: { parts: { text: string }[] };
+  };
+  expiresAt: string;
+};
 
-export async function uploadAnalysis(uri: string, clientRequestId: string, askingPriceCents?: number) {
-  const parameters = askingPriceCents === undefined ? undefined : { askingPriceCents: String(askingPriceCents) };
-  return uploadMultipart<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] }; idempotentReplay?: boolean }>(
-    "/analyses", uri, { "Idempotency-Key": clientRequestId }, parameters
-  );
-}
-
-export const retryIdentification = (id: string, uri: string) => uploadMultipart<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] } }>(`/analyses/${id}/identify`, uri, {});
+export const createGeminiLiveSession = () => apiRequest<{ data: GeminiLiveSession }>("/analyses/live-session", { method: "POST", body: JSON.stringify({}) });
+export const recordLiveIdentification = (identification: LiveIdentification, idempotencyKey: string) => apiRequest<{ data: { analysis: AnalysisResult["analysis"]; product: AnalysisResult["product"] }; idempotentReplay?: boolean }>(
+  "/analyses/live-result", { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ identification }) }
+);
 export const fetchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult }>(`/analyses/${id}`);
 export const confirmIdentification = (id: string, body: Record<string, unknown>) => apiRequest<{ data: unknown }>(`/analyses/${id}/confirm-identification`, { method: "POST", body: JSON.stringify(body) });
 export const researchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult; partial?: boolean }>(`/analyses/${id}/research`, { method: "POST", body: JSON.stringify({}) });

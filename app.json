@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.fllatech.radar",
-      "versionCode": 4,
+      "versionCode": 5,
       "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "backgroundColor": "#07100A",
@@ -40,15 +40,15 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Permitir que o RADAR fotografe produtos para identificação.",
+          "cameraPermission": "Permitir que o RADAR leia produtos ao vivo com a câmera.",
           "recordAudioAndroid": false
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Permitir que o RADAR selecione uma foto de produto da galeria.",
-          "cameraPermission": "Permitir que o RADAR abra a câmera para fotografar produtos.",
+          "photosPermission": "Permitir que o RADAR selecione uma imagem de produto para identificação.",
+          "cameraPermission": "Permitir que o RADAR leia produtos ao vivo com a câmera.",
           "microphonePermission": false
         }
       ],

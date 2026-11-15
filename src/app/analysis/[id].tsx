@@ -1,20 +1,18 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Linking, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, Text, View } from "react-native";
 import { Button, Card, Divider, Field, PageTitle, Pill, Screen } from "../../components/ui";
 import { money, parseMoneyToCents, percent, theme } from "../../constants/theme";
 import type { AnalysisResult } from "../../types/api";
-import { createOpportunity, confirmIdentification, fetchAnalysis, recalculateAnalysis, researchAnalysis, retryIdentification } from "../../services/api/client";
-import { discardLocalImage } from "../../features/images/temp-files";
+import { createOpportunity, confirmIdentification, fetchAnalysis, recalculateAnalysis, researchAnalysis } from "../../services/api/client";
 
 const scenarios = ["conservador", "provavel", "otimista"] as const;
 type Scenario = typeof scenarios[number];
 
 export default function AnalysisDetailScreen() {
-  const params = useLocalSearchParams<{ id: string; retryImageUri?: string }>();
+  const params = useLocalSearchParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
-  const retryImageUri = Array.isArray(params.retryImageUri) ? params.retryImageUri[0] : params.retryImageUri;
   const queryClient = useQueryClient();
   const analysisQuery = useQuery({
     queryKey: ["analysis", id], queryFn: async () => (await fetchAnalysis(id)).data, enabled: Boolean(id),
@@ -37,8 +35,6 @@ export default function AnalysisDetailScreen() {
   const [scenario, setScenario] = useState<Scenario>("provavel");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => () => { if (retryImageUri) void discardLocalImage(retryImageUri); }, [retryImageUri]);
-
   useEffect(() => {
     if (!product) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate editable identification fields from the API.
@@ -60,17 +56,6 @@ export default function AnalysisDetailScreen() {
   const refresh = async () => queryClient.invalidateQueries({ queryKey: ["analysis", id] });
   const comparableRefs = useMemo(() => result?.references.filter((reference) => reference.matchType === "EXATA" || reference.matchType === "ALTA") ?? [], [result?.references]);
   const partialRefs = useMemo(() => result?.references.filter((reference) => reference.matchType === "PARCIAL") ?? [], [result?.references]);
-
-  const identifyAgain = async () => {
-    if (!retryImageUri) return;
-    setBusy(true);
-    try {
-      await retryIdentification(id, retryImageUri);
-      await discardLocalImage(retryImageUri);
-      await refresh();
-    } catch (error: any) { Alert.alert("Identificação não concluída", error?.message ?? "Tente novamente."); }
-    finally { setBusy(false); }
-  };
 
   const confirmAndResearch = async () => {
     setBusy(true);
@@ -118,13 +103,6 @@ export default function AnalysisDetailScreen() {
   const recTone = recommendation === "COMPRAR" ? "green" : recommendation === "NEGOCIAR" ? "amber" : recommendation === "EVITAR" ? "red" : "muted";
   return <Screen contentStyle={{ gap: 16 }}>
     <PageTitle eyebrow="ANÁLISE RADAR" title={product?.name ?? "Identificando produto"} subtitle={[product?.brand, product?.model, product?.version].filter(Boolean).join(" · ") || "Produto ainda não confirmado"} right={<Pill label={result.analysis.status.toUpperCase().replaceAll("_", " ")} tone={result.analysis.status === "completed" ? "green" : result.analysis.status === "failed" ? "red" : "amber"} />} />
-
-    {retryImageUri && result.analysis.status === "failed" && !product ? <Card>
-      <Text style={{ color: theme.colors.text, fontSize: 17, fontWeight: "800" }}>A identificação falhou</Text>
-      <Text style={{ color: theme.colors.muted, lineHeight: 21 }}>A foto só fica no dispositivo enquanto você tenta novamente. O backend já descartou o temporário anterior.</Text>
-      <Image source={{ uri: retryImageUri }} style={{ height: 190, borderRadius: 14 }} resizeMode="cover" />
-      <Button title="Tentar identificar novamente" onPress={() => void identifyAgain()} loading={busy} />
-    </Card> : null}
 
     {product ? <Card>
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Identificação visual</Text><Pill label={`CONFIANÇA ${percent(product.confidenceBps)}`} tone="blue" /></View>
