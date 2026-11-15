@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.fllatech.radar",
+      "versionCode": 2,
       "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "backgroundColor": "#07100A",

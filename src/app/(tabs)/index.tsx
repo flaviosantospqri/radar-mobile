@@ -5,7 +5,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Network from "expo-network";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Image, Pressable, Text, View } from "react-native";
+import { Alert, AppState, Image, Linking, Pressable, Text, View } from "react-native";
 import { Button, Card, PageTitle, Pill, Screen } from "../../components/ui";
 import { theme } from "../../constants/theme";
 import { ApiError, uploadAnalysis } from "../../services/api/client";
@@ -22,7 +22,8 @@ async function compressImage(uri: string) {
 
 export default function ScannerScreen() {
   const camera = useRef<CameraView>(null);
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [permissionWorking, setPermissionWorking] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraActive, setCameraActive] = useState(true);
   const [torch, setTorch] = useState(false);
@@ -34,6 +35,13 @@ export default function ScannerScreen() {
     setCameraActive(true);
     return () => setCameraActive(false);
   }, []));
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void getPermission();
+    });
+    return () => subscription.remove();
+  }, [getPermission]);
 
   const refreshQueue = useCallback(async () => setPendingCount((await listPendingAnalyses()).length), []);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- Queue state loads from AsyncStorage after mount.
@@ -66,6 +74,34 @@ export default function ScannerScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, quality: 1 });
       if (!result.canceled && result.assets[0]?.uri) await setImage(result.assets[0].uri);
     } catch (error: any) { Alert.alert("Galeria indisponível", error?.message ?? "Verifique a permissão para suas fotos."); }
+  };
+
+  const openSettings = async () => {
+    try { await Linking.openSettings(); }
+    catch { Alert.alert("Configurações indisponíveis", "Abra as configurações do Android e permita o acesso à câmera para o RADAR."); }
+  };
+
+  const handleCameraPermission = async () => {
+    if (!permission) return;
+    if (!permission.canAskAgain) {
+      await openSettings();
+      return;
+    }
+    setPermissionWorking(true);
+    try {
+      const result = await requestPermission();
+      if (!result.granted && !result.canAskAgain) {
+        Alert.alert("Acesso à câmera bloqueado", "Permita o acesso à câmera nas configurações do Android para fotografar produtos.", [
+          { text: "Agora não", style: "cancel" },
+          { text: "Abrir configurações", onPress: () => { void openSettings(); } },
+        ]);
+      }
+    } catch {
+      Alert.alert("Não foi possível solicitar a permissão", "Abra as configurações do Android para permitir o acesso à câmera.", [
+        { text: "Agora não", style: "cancel" },
+        { text: "Abrir configurações", onPress: () => { void openSettings(); } },
+      ]);
+    } finally { setPermissionWorking(false); }
   };
 
   const analyzePhoto = async () => {
@@ -101,11 +137,12 @@ export default function ScannerScreen() {
   };
 
   if (!permission) return <Screen><PageTitle title="Scanner" subtitle="Verificando permissão para acessar a câmera…" /></Screen>;
-  if (!permission.granted) return <Screen>
+  if (!permission.granted && !previewUri) return <Screen>
     <PageTitle eyebrow="RADAR SCANNER" title="A câmera começa a busca" subtitle="Dê permissão para fotografar. Você também pode escolher uma imagem da galeria." />
     <Card><Text style={{ color: theme.colors.muted, lineHeight: 21 }}>O RADAR envia a foto ao backend para identificação. O backend mantém somente os dados da análise e descarta a foto temporária.</Text>
-      <Button title="Permitir câmera" onPress={() => void requestPermission()} />
-      <Button title="Escolher da galeria" variant="secondary" onPress={() => void choosePhoto()} />
+      {!permission.canAskAgain ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>A permissão da câmera está bloqueada pelo Android. Abra as configurações do app para liberá-la; a galeria continua disponível sem essa permissão.</Text> : null}
+      <Button title={permission.canAskAgain ? "Permitir câmera" : "Abrir configurações"} onPress={() => void handleCameraPermission()} loading={permissionWorking} />
+      <Button title="Escolher da galeria" variant="secondary" onPress={() => void choosePhoto()} loading={working} />
     </Card>
   </Screen>;
 
