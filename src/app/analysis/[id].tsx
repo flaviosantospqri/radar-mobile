@@ -36,6 +36,8 @@ export default function AnalysisDetailScreen() {
   const [additional, setAdditional] = useState("0");
   const [fee, setFee] = useState("0");
   const [scenario, setScenario] = useState<Scenario>("provavel");
+  const [refineMode, setRefineMode] = useState(false);
+  const [showAdvancedCosts, setShowAdvancedCosts] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -77,7 +79,8 @@ export default function AnalysisDetailScreen() {
         category: category.trim() || null, subcategory: subcategory.trim() || null,
         version: version.trim() || null, visibleCondition: visibleCondition.trim() || null, functionalCondition,
       });
-      await researchAnalysis(id);
+      await researchAnalysis(id, true);
+      setRefineMode(false);
       await refresh();
     } catch (error: any) {
       Alert.alert("A etapa não foi concluída", error?.message ?? "A confirmação foi salva, mas a pesquisa pode ser repetida.");
@@ -85,9 +88,9 @@ export default function AnalysisDetailScreen() {
     } finally { setBusy(false); }
   };
 
-  const runResearch = async () => {
+  const runResearch = async (force = Boolean(result?.lastResearch)) => {
     setBusy(true);
-    try { await researchAnalysis(id); await refresh(); }
+    try { await researchAnalysis(id, force); await refresh(); }
     catch (error: any) { Alert.alert("Pesquisa indisponível", error?.message ?? "A identificação continua salva."); }
     finally { setBusy(false); }
   };
@@ -115,10 +118,15 @@ export default function AnalysisDetailScreen() {
   if (analysisQuery.isLoading) return <Screen><View style={{ padding: 42 }}><ActivityIndicator color={theme.colors.green} /><Text style={{ color: theme.colors.muted, textAlign: "center", marginTop: 12 }}>Abrindo análise…</Text></View></Screen>;
   if (analysisQuery.isError || !result) return <Screen><PageTitle title="Análise indisponível" subtitle={(analysisQuery.error as Error)?.message ?? "Não foi possível abrir esta análise."} /><Button title="Voltar" variant="secondary" onPress={() => router.back()} /><Button title="Tentar novamente" onPress={() => void analysisQuery.refetch()} /></Screen>;
 
-  const recommendation = result.analysis.recommendation;
+  const hasResearch = Boolean(result.lastResearch);
+  const hasPurchasePrice = result.profitability?.purchasePriceCents !== null && result.profitability?.purchasePriceCents !== undefined;
+  const recommendation = hasPurchasePrice ? result.analysis.recommendation : null;
   const recTone = recommendation === "COMPRAR" ? "green" : recommendation === "NEGOCIAR" ? "amber" : recommendation === "EVITAR" ? "red" : "muted";
+  const analysisStatusLabel = result.analysis.status === "awaiting_confirmation"
+    ? "PRONTO PARA PESQUISA" : result.analysis.status.toUpperCase().replaceAll("_", " ");
+  const analysisStatusTone = result.analysis.status === "completed" || result.analysis.status === "awaiting_confirmation" ? "green" : result.analysis.status === "failed" ? "red" : "amber";
   return <Screen contentStyle={{ gap: 16 }}>
-    <PageTitle eyebrow="ANÁLISE RADAR" title={product?.name ?? "Identificando produto"} subtitle={[product?.brand, product?.model, product?.version].filter(Boolean).join(" · ") || "Produto ainda não confirmado"} right={<Pill label={result.analysis.status.toUpperCase().replaceAll("_", " ")} tone={result.analysis.status === "completed" ? "green" : result.analysis.status === "failed" ? "red" : "amber"} />} />
+    <PageTitle eyebrow="ANÁLISE RADAR" title={product?.name ?? "Identificando produto"} subtitle={[product?.brand, product?.model, product?.version].filter(Boolean).join(" · ") || (product?.confirmedByUser ? "Identificação confirmada" : "Identificação pronta; refine se quiser")} right={<Pill label={analysisStatusLabel} tone={analysisStatusTone} />} />
 
     {product ? <Card>
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Identificação visual</Text><Pill label={`CONFIANÇA ${percent(product.confidenceBps)}`} tone="blue" /></View>
@@ -128,11 +136,21 @@ export default function AnalysisDetailScreen() {
       {product.confidenceBps !== null && product.confidenceBps < 3500 ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>Identificação parcial: confira as hipóteses e ajuste os campos antes da pesquisa.</Text> : null}
       {product.uncertainInformation.length ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>Não confirmado: {product.uncertainInformation.join("; ")}</Text> : null}
       {product.warnings.length ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>{product.warnings.join("; ")}</Text> : null}
+      {product.confirmedByUser && hasResearch && !refineMode ? <Button title="Refinar identificação" variant="quiet" onPress={() => setRefineMode(true)} disabled={busy} /> : null}
     </Card> : null}
 
-    {product && !product.confirmedByUser ? <Card>
-      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Confirme antes da pesquisa</Text>
-      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Revise os campos. A pesquisa só começa depois da confirmação.</Text>
+    {product && (!product.confirmedByUser || !hasResearch || result.lastResearch?.status === "failed" || refineMode) ? <Card>
+      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>{refineMode ? "Refinar a identificação" : "Pesquisar preço de mercado"}</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>
+        {refineMode
+          ? "Ajuste só o que você souber. Depois, a pesquisa usa os dados refinados."
+          : "Você pode pesquisar agora com o que o Gemini reconheceu. Marca, edição e condição incertas podem mudar os comparáveis; refinar é opcional."}
+      </Text>
+      {!refineMode ? <>
+        {result.lastResearch?.status === "failed" ? <Text style={{ color: theme.colors.amber, lineHeight: 19 }}>A última consulta falhou. Tente novamente ou refine os dados do produto.</Text> : null}
+        <Button title={hasResearch ? "Pesquisar mercado novamente" : "Pesquisar assim mesmo"} onPress={() => void runResearch()} loading={busy} />
+        <Button title="Refinar identificação" variant="secondary" onPress={() => setRefineMode(true)} disabled={busy} />
+      </> : <>
       {suggestions.length ? <View style={{ gap: 8 }}>
         <Text style={{ color: theme.colors.amber, fontSize: 12, fontWeight: "800" }}>HIPÓTESES DO GEMINI · TOQUE PARA USAR</Text>
         {suggestions.map((suggestion, index) => <Pressable
@@ -155,17 +173,21 @@ export default function AnalysisDetailScreen() {
       <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: "700" }}>FUNCIONAMENTO</Text>
       <View style={{ flexDirection: "row", gap: 7, flexWrap: "wrap" }}>{[["funcionando", "Funciona"], ["com_defeito", "Com defeito"], ["nao_testado", "Não testado"], ["nao_aplicavel", "Não se aplica"]].map(([value, label]) => <Pressable key={value} onPress={() => setFunctionalCondition(value)}><Pill label={label.toUpperCase()} tone={functionalCondition === value ? "green" : "muted"} /></Pressable>)}</View>
       {product.verificationQuestions.length ? <Text style={{ color: theme.colors.amber, fontSize: 12, lineHeight: 19 }}>Verifique: {product.verificationQuestions.join(" · ")}</Text> : null}
-      <Button title="Confirmar e pesquisar mercado" onPress={() => void confirmAndResearch()} loading={busy} disabled={!name.trim()} />
+      <Button title="Salvar ajustes e pesquisar" onPress={() => void confirmAndResearch()} loading={busy} disabled={!name.trim()} />
+      <Button title="Cancelar refinamento" variant="quiet" onPress={() => setRefineMode(false)} disabled={busy} />
+      </>}
     </Card> : null}
 
-    {product?.confirmedByUser && result.lastResearch?.status === "failed" ? <Card><Text style={{ color: theme.colors.amber, fontWeight: "800" }}>Pesquisa parcial</Text><Text style={{ color: theme.colors.muted, lineHeight: 20 }}>A identificação foi preservada. Tente a pesquisa novamente quando a fonte estiver disponível.</Text><Button title="Tentar pesquisa de novo" variant="secondary" onPress={() => void runResearch()} loading={busy} /></Card> : null}
-
-    {product?.confirmedByUser ? <Card>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Referências de mercado</Text><Pill label={`${result.market.comparableCount} COMPATÍVEIS`} tone={result.market.comparableCount >= 3 ? "green" : "amber"} /></View>
+    {hasResearch ? <Card>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Preço no mercado</Text><Pill label={`${result.market.comparableCount} COMPATÍVEIS`} tone={result.market.comparableCount >= 3 ? "green" : "amber"} /></View>
       {result.market.comparableCount ? <>
-        <View style={{ flexDirection: "row", justifyContent: "space-between" }}><PriceMetric label="MENOR" value={money(result.market.lowestPriceCents)} /><PriceMetric label="MEDIANA" value={money(result.market.medianPriceCents)} accent /><PriceMetric label="MAIOR" value={money(result.market.highestPriceCents)} /></View>
-        <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 17 }}>Consulta em {result.market.collectedAt ? new Date(result.market.collectedAt).toLocaleString("pt-BR") : "—"} · {result.market.sourceNames.join(", ")}. São anúncios ativos; não comprovam vendas realizadas.</Text>
-      </> : <Text style={{ color: theme.colors.muted, lineHeight: 20 }}>Ainda não há referências compatíveis. Sem dados suficientes, o RADAR não emite recomendação positiva definitiva.</Text>}
+        <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
+          <PriceMetric label="MÉDIA ANUNCIADA" value={money(result.market.averagePriceCents)} accent />
+          <PriceMetric label="MEDIANA" value={money(result.market.medianPriceCents)} />
+          <PriceMetric label="FAIXA OBSERVADA" value={`${money(result.market.lowestPriceCents)} – ${money(result.market.highestPriceCents)}`} />
+        </View>
+        <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 17 }}>Consulta em {result.market.collectedAt ? new Date(result.market.collectedAt).toLocaleString("pt-BR") : "—"} · {result.market.sourceNames.join(", ")}. São preços anunciados, não vendas confirmadas; marca, edição e conservação podem alterar o valor.</Text>
+      </> : <Text style={{ color: result.lastResearch?.status === "failed" ? theme.colors.amber : theme.colors.muted, lineHeight: 20 }}>{result.lastResearch?.status === "failed" ? "A consulta ao mercado não terminou. Tente novamente ou refine a identificação." : "Não encontramos anúncios compatíveis com essa identificação. Refine marca, modelo ou categoria e pesquise novamente."}</Text>}
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.muted, fontSize: 12 }}>Liquidez aparente</Text><Pill label={result.market.liquidity} tone={result.market.liquidity === "ALTA" ? "green" : result.market.liquidity === "INSUFICIENTE" ? "muted" : "amber"} /></View>
       <Text style={{ color: theme.colors.faint, fontSize: 11, lineHeight: 17 }}>A quantidade de anúncios não mede compradores nem velocidade de venda. Nível: {percent(result.market.researchConfidenceBps)} de cobertura das referências.</Text>
       {partialRefs.length ? <>
@@ -175,33 +197,48 @@ export default function AnalysisDetailScreen() {
       {comparableRefs.slice(0, 8).map((reference) => <MarketRow key={reference.id} reference={reference} />)}
     </Card> : null}
 
-    {product?.confirmedByUser ? <Card>
-      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Calculadora de compra</Text>
-      <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>Alterar valores recalcula apenas as finanças. Não chama Gemini nem pesquisa de novo.</Text>
-      <Field label="PREÇO PEDIDO (R$)" keyboardType="decimal-pad" value={askingPrice} onChangeText={setAskingPrice} placeholder="0,00" />
-      <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="TRANSPORTE" keyboardType="decimal-pad" value={transport} onChangeText={setTransport} /></View><View style={{ flex: 1 }}><Field label="MANUTENÇÃO" keyboardType="decimal-pad" value={maintenance} onChangeText={setMaintenance} /></View></View>
-      <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="PREPARAÇÃO" keyboardType="decimal-pad" value={preparation} onChangeText={setPreparation} /></View><View style={{ flex: 1 }}><Field label="OUTROS CUSTOS" keyboardType="decimal-pad" value={additional} onChangeText={setAdditional} /></View></View>
-      <Field label="TAXA DE VENDA (%)" keyboardType="decimal-pad" value={fee} onChangeText={setFee} />
-      <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: "700" }}>CENÁRIO</Text>
-      <View style={{ flexDirection: "row", gap: 7 }}>{scenarios.map((value) => <View style={{ flex: 1 }} key={value}><Button title={value[0].toUpperCase() + value.slice(1)} variant={scenario === value ? "primary" : "quiet"} onPress={() => setScenario(value)} /></View>)}</View>
-      <Button title="Calcular lucro e preço máximo" onPress={() => void recalculate()} loading={busy} disabled={!askingPrice.trim()} />
+    {hasResearch && result.market.comparableCount > 0 ? <Card>
+      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>{hasPurchasePrice ? "Resultado financeiro" : "Quanto vale a pena pagar?"}</Text>
+      {hasPurchasePrice ? <>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>{recommendation ? <Pill label={recommendation} tone={recTone} /> : null}<Text style={{ color: theme.colors.faint, fontSize: 11 }}>Cenário {scenario}</Text></View>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
+          <PriceMetric label="REVENDA EST." value={money(result.profitability?.resalePriceCents ?? null)} accent />
+          <PriceMetric label="LUCRO LÍQUIDO" value={money(result.profitability?.estimatedProfitCents ?? null)} accent />
+          <PriceMetric label="ROI" value={percent(result.profitability?.roiBps ?? null)} />
+          <PriceMetric label="MARGEM" value={percent(result.profitability?.marginBps ?? null)} />
+        </View>
+        {recommendation && result.analysis.recommendationReasons?.length ? result.analysis.recommendationReasons.map((reason, index) => <Text key={index} style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19 }}>• {reason}</Text>) : null}
+      </> : <>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
+          <PriceMetric label="MÉDIA DO MERCADO" value={money(result.market.averagePriceCents)} accent />
+          <PriceMetric label="TETO DE COMPRA RECOMENDADO" value={money(result.profitability?.maximumPurchasePriceCents ?? null)} />
+        </View>
+        <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>Sem o preço pedido, não dá para calcular seu lucro líquido. Esse teto mostra quanto pagar no máximo, considerando taxas, custos e metas configurados. O preço pedido é opcional.</Text>
+      </>}
+      <Text style={{ color: theme.colors.faint, fontSize: 11 }}>A estimativa usa anúncios ativos semelhantes e pode variar conforme a identificação e a condição real do item.</Text>
     </Card> : null}
 
-    {result.profitability ? <Card>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Resultado financeiro</Text>{recommendation ? <Pill label={recommendation} tone={recTone} /> : null}</View>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
-        <PriceMetric label="REVENDA EST." value={money(result.profitability.resalePriceCents)} accent />
-        <PriceMetric label="LUCRO LÍQUIDO" value={money(result.profitability.estimatedProfitCents)} accent />
-        <PriceMetric label="ROI" value={percent(result.profitability.roiBps)} />
-        <PriceMetric label="MARGEM" value={percent(result.profitability.marginBps)} />
-      </View>
-      <View style={{ backgroundColor: theme.colors.elevated, borderRadius: 14, padding: 14, gap: 5 }}><Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: "800" }}>PREÇO MÁXIMO RECOMENDADO</Text><Text style={{ color: theme.colors.green, fontSize: 23, fontWeight: "900" }}>{money(result.profitability.maximumPurchasePriceCents)}</Text></View>
-      <Text style={{ color: theme.colors.faint, fontSize: 11 }}>Cenários usam percentis 25, 50 e 75 das referências compatíveis. Valores são anúncios e custos estimados.</Text>
-      {recommendation && result.analysis.recommendationReasons?.length ? result.analysis.recommendationReasons.map((reason, index) => <Text key={index} style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19 }}>• {reason}</Text>) : null}
+    {hasResearch && result.market.comparableCount > 0 ? <Card>
+      <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Quer calcular seu lucro?</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>Opcional. Informe o valor que o vendedor pediu para comparar com o mercado.</Text>
+      <Field label="PREÇO PEDIDO (OPCIONAL)" keyboardType="decimal-pad" value={askingPrice} onChangeText={setAskingPrice} placeholder="Ex.: 50,00" />
+      <Button title="Calcular lucro neste preço" onPress={() => void recalculate()} loading={busy} disabled={!askingPrice.trim()} />
+      <Pressable onPress={() => setShowAdvancedCosts((value) => !value)} disabled={busy}>
+        <Text style={{ color: theme.colors.green, fontSize: 12, fontWeight: "800" }}>{showAdvancedCosts ? "OCULTAR CUSTOS E CENÁRIOS" : "AJUSTAR CUSTOS E CENÁRIOS (OPCIONAL)"}</Text>
+      </Pressable>
+      {showAdvancedCosts ? <>
+        <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="TRANSPORTE" keyboardType="decimal-pad" value={transport} onChangeText={setTransport} /></View><View style={{ flex: 1 }}><Field label="MANUTENÇÃO" keyboardType="decimal-pad" value={maintenance} onChangeText={setMaintenance} /></View></View>
+        <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="PREPARAÇÃO" keyboardType="decimal-pad" value={preparation} onChangeText={setPreparation} /></View><View style={{ flex: 1 }}><Field label="OUTROS CUSTOS" keyboardType="decimal-pad" value={additional} onChangeText={setAdditional} /></View></View>
+        <Field label="TAXA DE VENDA (%)" keyboardType="decimal-pad" value={fee} onChangeText={setFee} />
+        <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: "700" }}>CENÁRIO DE REVENDA</Text>
+        <View style={{ flexDirection: "row", gap: 7 }}>{scenarios.map((value) => <View style={{ flex: 1 }} key={value}><Button title={value[0].toUpperCase() + value.slice(1)} variant={scenario === value ? "primary" : "quiet"} onPress={() => setScenario(value)} /></View>)}</View>
+      </> : null}
+    </Card> : null}
+
+    {hasPurchasePrice ? <Card>
       <Button title="Salvar oportunidade" onPress={() => void saveOpportunity()} loading={busy} />
     </Card> : null}
 
-    {result.lastResearch?.status === "success" && result.references.length === 0 ? <Card><Text style={{ color: theme.colors.amber, fontWeight: "800" }}>Nenhum anúncio retornado</Text><Text style={{ color: theme.colors.muted, lineHeight: 20 }}>A identificação está salva. Tente refinar marca, modelo ou categoria e pesquisar novamente.</Text><Button title="Pesquisar novamente" variant="secondary" onPress={() => void runResearch()} loading={busy} /></Card> : null}
     <Button title="Voltar" variant="quiet" onPress={() => router.back()} />
   </Screen>;
 }

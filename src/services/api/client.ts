@@ -93,7 +93,7 @@ export const recordLiveIdentification = (identification: LiveIdentification, ide
 );
 export const fetchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult }>(`/analyses/${id}`);
 export const confirmIdentification = (id: string, body: Record<string, unknown>) => apiRequest<{ data: unknown }>(`/analyses/${id}/confirm-identification`, { method: "POST", body: JSON.stringify(body) });
-export const researchAnalysis = (id: string) => apiRequest<{ data: AnalysisResult; partial?: boolean }>(`/analyses/${id}/research`, { method: "POST", body: JSON.stringify({}) });
+export const researchAnalysis = (id: string, force = false) => apiRequest<{ data: AnalysisResult; partial?: boolean }>(`/analyses/${id}/research`, { method: "POST", body: JSON.stringify({ force }) });
 export const recalculateAnalysis = (id: string, body: Record<string, unknown>) => apiRequest<{ data: AnalysisResult }>(`/analyses/${id}/recalculate`, { method: "POST", body: JSON.stringify(body) });
 export const deleteAnalysis = (id: string) => apiRequest<void>(`/analyses/${id}`, { method: "DELETE" });
 export const fetchHistory = (page = 1) => apiRequest<{ data: any[]; pagination: { page: number; pages: number; total: number } }>(`/analyses?page=${page}&limit=20`);

@@ -27,7 +27,7 @@ export type AnalysisResult = {
   analysis: Analysis;
   product: Product | null;
   market: {
-    comparableCount: number; partialCount: number; lowestPriceCents: number | null; q25PriceCents: number | null;
+    comparableCount: number; partialCount: number; averagePriceCents: number | null; lowestPriceCents: number | null; q25PriceCents: number | null;
     medianPriceCents: number | null; q75PriceCents: number | null; highestPriceCents: number | null;
     partialMedianPriceCents: number | null; liquidity: Liquidity; researchConfidenceBps: number;
     collectedAt: string | null; isActiveListingData: true; representsCompletedSales: false; sourceNames: string[];

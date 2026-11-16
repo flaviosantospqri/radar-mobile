@@ -3,7 +3,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AppState, Image, Linking, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Animated, AppState, Image, Linking, Text, View } from "react-native";
 import { Button, Card, PageTitle, Pill, Screen } from "../../components/ui";
 import { theme } from "../../constants/theme";
 import { createGeminiLiveSession, recordLiveIdentification, type LiveIdentification } from "../../services/api/client";
@@ -214,7 +214,7 @@ export default function ScannerScreen() {
         const camera = cameraRef.current;
         if (!camera) throw new Error("A câmera foi fechada durante a leitura.");
         if (runIdRef.current !== runId) return;
-        const capture = await camera.takePictureAsync({ quality: 0.55, exif: false });
+        const capture = await camera.takePictureAsync({ quality: 0.55, exif: false, shutterSound: false });
         let frameUri: string | null = null;
         try {
           const frame = await compressFrame(capture.uri);
@@ -224,11 +224,11 @@ export default function ScannerScreen() {
           const requestIdentification = nextFrameNumber === 1 || (nextFrameNumber - 1) % IDENTIFICATION_PROMPT_INTERVAL_FRAMES === 0;
           connection?.sendFrame(frame.base64!, requestIdentification);
           frameNumber = nextFrameNumber;
-          setStatusText((current) => current.includes("Hipótese inicial") || current.includes("Produto reconhecido")
+          setStatusText((current) => current.includes("JSON atualizado")
             ? current
             : requestIdentification
-              ? `Gemini analisando o produto · ${frameNumber} quadros enviados`
-              : `Leitura ao vivo ativa · ${frameNumber} quadros enviados`);
+              ? "Gemini analisando o produto · continue apontando"
+              : "Leitura ao vivo ativa · continue apontando para o produto");
         } finally {
           await discardLocalImage(frameUri);
           await discardLocalImage(capture.uri);
@@ -355,6 +355,7 @@ export default function ScannerScreen() {
     </View>
 
     {cameraError ? <Text style={{ color: theme.colors.red, fontSize: 13, lineHeight: 20 }}>A câmera deste aparelho não abriu: {cameraError}</Text> : null}
+    {scanning ? <LiveScanProgress connecting={statusText.includes("Conectando") || statusText.includes("Aguardando") || statusText.includes("Configuração enviada") || statusText.includes("WebSocket aberto")} /> : null}
     {statusText ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.green, fontSize: 13, fontWeight: "700", textAlign: "center" }}>{statusText}</Text> : null}
 
     <View style={{ flexDirection: "row", gap: 12 }}>
@@ -397,7 +398,32 @@ export default function ScannerScreen() {
 
     <Card style={{ gap: 8 }}>
       <Text style={{ color: theme.colors.text, fontWeight: "800", fontSize: 14 }}>Depois da identificação</Text>
-      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Você confirma o nome e o modelo. O RADAR consulta anúncios de mercado, calcula margem e lucro e guarda somente os dados da análise.</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Pesquise o mercado com a identificação do Gemini ou refine os dados se quiser. O preço pedido é opcional: sem ele, o RADAR mostra a média dos anúncios e quanto vale pagar no máximo.</Text>
     </Card>
   </Screen>;
+}
+
+function LiveScanProgress({ connecting }: { connecting: boolean }) {
+  const [progress] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(progress, { toValue: 1, duration: 1_100, useNativeDriver: true }),
+      Animated.timing(progress, { toValue: 0, duration: 0, useNativeDriver: true }),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [progress]);
+  const translateX = progress.interpolate({ inputRange: [0, 1], outputRange: [-110, 300] });
+
+  return <View style={{ backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 14, padding: 13, gap: 10 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+      <ActivityIndicator size="small" color={theme.colors.green} />
+      <Text style={{ color: theme.colors.text, flex: 1, fontSize: 13, fontWeight: "700" }}>
+        {connecting ? "Conectando a leitura segura…" : "Lendo o produto. Continue apontando."}
+      </Text>
+    </View>
+    <View style={{ height: 4, borderRadius: 4, overflow: "hidden", backgroundColor: theme.colors.elevated }}>
+      <Animated.View style={{ width: "38%", height: "100%", borderRadius: 4, backgroundColor: theme.colors.green, transform: [{ translateX }] }} />
+    </View>
+  </View>;
 }

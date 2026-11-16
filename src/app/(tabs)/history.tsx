@@ -7,7 +7,7 @@ import { money, theme } from "../../constants/theme";
 import { deleteAnalysis, fetchHistory } from "../../services/api/client";
 
 function statusLabel(status?: string) {
-  const values: Record<string, string> = { awaiting_confirmation: "AGUARDA CONFIRMAÇÃO", identifying: "IDENTIFICANDO", researching: "PESQUISANDO", completed: "CONCLUÍDA", partial: "PARCIAL", failed: "FALHOU", pending: "PENDENTE" };
+  const values: Record<string, string> = { awaiting_confirmation: "PRONTO PARA PESQUISA", identifying: "IDENTIFICANDO", researching: "PESQUISANDO", completed: "CONCLUÍDA", partial: "PARCIAL", failed: "FALHOU", pending: "PENDENTE" };
   return values[status ?? ""] ?? status?.toUpperCase() ?? "ANÁLISE";
 }
 
@@ -38,7 +38,7 @@ export default function HistoryScreen() {
       const analysis = row.analysis;
       const product = row.product;
       const financial = row.profitability;
-      const rec = analysis.recommendation;
+      const rec = analysis.askingPriceCents === null ? null : analysis.recommendation;
       const tone = rec === "COMPRAR" ? "green" : rec === "EVITAR" ? "red" : rec === "NEGOCIAR" ? "amber" : "muted";
       return <Pressable key={analysis.id} onPress={() => router.push({ pathname: "/analysis/[id]", params: { id: analysis.id } })}>
         <Card>
