@@ -8,7 +8,7 @@ import { Button, Card, PageTitle, Pill, Screen } from "../../components/ui";
 import { theme } from "../../constants/theme";
 import { createGeminiLiveSession, recordLiveIdentification, type LiveIdentification } from "../../services/api/client";
 import { discardLocalImage } from "../../features/images/temp-files";
-import { connectGeminiLive, type GeminiLiveConnection } from "../../features/scanner/gemini-live";
+import { connectGeminiLive, type GeminiLiveConnection, type GeminiLiveConnectionStage } from "../../features/scanner/gemini-live";
 import { identificationScore, isUsefulIdentification, mergeIdentifications, parseIdentification } from "../../features/scanner/identification";
 
 const MAX_SCAN_DURATION_MS = 30_000;
@@ -116,10 +116,23 @@ export default function ScannerScreen() {
         if (runIdRef.current !== runId) throw new Error("A leitura foi encerrada.");
         console.info("[RADAR][Gemini Live] session_token_received", { attempt });
         setStatusText("Sessão segura pronta. Conectando a câmera diretamente ao Gemini...");
-        const liveConnection = await connectGeminiLive(session.data, onIdentification, (error) => {
-          connectionErrorRef.current = error;
-          setStatusText("A conexão com o Gemini foi encerrada. Preparando o melhor resultado disponível...");
-        });
+        const liveConnection = await connectGeminiLive(
+          session.data,
+          onIdentification,
+          (error) => {
+            connectionErrorRef.current = error;
+            setStatusText("A conexão com o Gemini foi encerrada. Preparando o melhor resultado disponível...");
+          },
+          (stage: GeminiLiveConnectionStage) => {
+            if (runIdRef.current !== runId) return;
+            const progress = {
+              websocket_open: "WebSocket aberto. Enviando a configuração ao Gemini...",
+              setup_sent: "Configuração enviada. Aguardando confirmação do Gemini...",
+              setup_complete: "Gemini conectado. Iniciando leitura da câmera...",
+            }[stage];
+            setStatusText(progress);
+          },
+        );
         console.info("[RADAR][Gemini Live] session_ready", { attempt });
         return liveConnection;
       } catch (error) {

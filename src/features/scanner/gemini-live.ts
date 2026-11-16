@@ -18,6 +18,8 @@ export type GeminiLiveConnection = {
   close: () => void;
 };
 
+export type GeminiLiveConnectionStage = "websocket_open" | "setup_sent" | "setup_complete";
+
 const LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 const IDENTIFICATION_TOOL = "report_product_identification";
 const IDENTIFICATION_PROMPT = "Analise os quadros da câmera recebidos até agora e chame report_product_identification agora com sua melhor identificação estruturada. Se não souber marca, modelo, ano ou edição, forneça uma hipótese ampla útil em attributes.suggestions. Não espere novos quadros para responder.";
@@ -27,17 +29,42 @@ function diagnostic(event: string, detail?: Record<string, unknown>) {
   console.info("[RADAR][Gemini Live]", event, detail ?? "");
 }
 
+async function readSocketMessage(data: unknown): Promise<string> {
+  if (typeof data === "string") return data;
+
+  let blob: Blob;
+  if (typeof Blob !== "undefined" && data instanceof Blob) blob = data;
+  else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) blob = new Blob([data as BlobPart]);
+  else throw new Error("O Gemini retornou um quadro de mensagem incompatível.");
+
+  if (typeof blob.text === "function") return blob.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string"
+      ? resolve(reader.result)
+      : reject(new Error("Não foi possível decodificar a resposta do Gemini."));
+    reader.onerror = () => reject(new Error("Não foi possível ler a resposta binária do Gemini."));
+    reader.readAsText(blob);
+  });
+}
+
 export function connectGeminiLive(
   session: GeminiLiveSession,
   onIdentification: (raw: string) => void,
   onConnectionError: (error: Error) => void,
+  onStage?: (stage: GeminiLiveConnectionStage) => void,
 ): Promise<GeminiLiveConnection> {
   return new Promise((resolve, reject) => {
     diagnostic("websocket_connecting", { model: session.model });
     const socket = new WebSocket(`${LIVE_ENDPOINT}?access_token=${encodeURIComponent(session.token)}`);
+    socket.binaryType = "arraybuffer";
     let connected = false;
     let closed = false;
     let frameCount = 0;
+    let incomingMessages = Promise.resolve();
+    const reportStage = (stage: GeminiLiveConnectionStage) => {
+      try { onStage?.(stage); } catch { diagnostic("stage_callback_failed", { stage }); }
+    };
     const setupTimeout = setTimeout(() => {
       if (!connected) fail(new Error("O Gemini não concluiu a configuração da sessão a tempo."));
     }, SETUP_TIMEOUT_MS);
@@ -54,25 +81,29 @@ export function connectGeminiLive(
 
     socket.onopen = () => {
       diagnostic("websocket_open");
+      reportStage("websocket_open");
       try {
         socket.send(JSON.stringify({ setup: { model: session.model, ...session.setup } }));
         diagnostic("setup_sent");
+        reportStage("setup_sent");
       } catch {
         fail(new Error("Não foi possível enviar a configuração da sessão Gemini."));
       }
     };
 
-    socket.onmessage = (event) => {
+    const handleMessage = async (data: unknown) => {
       let message: LiveMessage;
-      try { message = JSON.parse(String(event.data)) as LiveMessage; }
+      try { message = JSON.parse(await readSocketMessage(data)) as LiveMessage; }
       catch {
-        diagnostic("invalid_server_message");
+        const isBlob = typeof Blob !== "undefined" && data instanceof Blob;
+        diagnostic("invalid_server_message", { dataType: data instanceof ArrayBuffer ? "arraybuffer" : isBlob ? "blob" : typeof data });
         return;
       }
 
       if (message.error) {
         diagnostic("setup_rejected", { status: message.error.status ?? "unknown", code: message.error.code ?? "unknown" });
-        fail(new Error("O Gemini recusou a configuração da sessão. Confira o modelo configurado no backend."));
+        const reason = message.error.status ?? (message.error.code ? `código ${message.error.code}` : "sem código");
+        fail(new Error(`O Gemini recusou a configuração da sessão (${reason}).`));
         return;
       }
       if (message.setupComplete) {
@@ -80,6 +111,7 @@ export function connectGeminiLive(
         connected = true;
         clearTimeout(setupTimeout);
         diagnostic("setup_complete");
+        reportStage("setup_complete");
         resolve({
           sendFrame(base64Jpeg, requestIdentification = false) {
             if (closed || socket.readyState !== WebSocket.OPEN) throw new Error("A sessão visual foi encerrada.");
@@ -130,6 +162,12 @@ export function connectGeminiLive(
           if (connected) fail(new Error("A conexão com o Gemini caiu ao processar a identificação."));
         }
       }
+    };
+
+    socket.onmessage = (event) => {
+      incomingMessages = incomingMessages
+        .then(() => handleMessage(event.data))
+        .catch(() => diagnostic("message_handler_failed"));
     };
 
     socket.onerror = () => {
