@@ -21,9 +21,13 @@ A conexão direta ao Gemini exige internet. Se ela falhar, a leitura pode ser in
 
 ## Build Android
 
-O perfil `preview` em `eas.json` gera um APK instalável com `npx eas-cli build --platform android --profile preview`. O perfil `production` gera um Android App Bundle.
+Para gerar localmente um APK independente, que abre sem Metro e inclui o bundle JavaScript, use `cd android; .\\gradlew.bat assembleRelease`. O APK é assinado com a chave debug do template e serve para instalação/teste; para publicar na Play Store, configure uma chave de assinatura própria e gere o App Bundle.
 
-A mudança do scanner requer uma nova build/instalação do app (versionCode 5). Configure `EXPO_PUBLIC_API_URL` no ambiente de build; a URL é incorporada ao aplicativo. Nenhuma chave Gemini deve ser criada no mobile nem incluída em `.env` do app.
+O `assembleDebug` depende de um servidor Metro e não deve ser distribuído como instalador independente. A configuração Android inclui ARMv7, ARM64, x86 e x86_64 no APK universal. O app exige Android 7.0 (API 24) ou superior.
+
+O perfil `preview` em `eas.json` também gera um APK instalável com `npx eas-cli build --platform android --profile preview`. O perfil `production` gera um Android App Bundle.
+
+A mudança do scanner requer uma nova build/instalação do app (versionCode 6). Configure `EXPO_PUBLIC_API_URL` no ambiente de build; a URL é incorporada ao aplicativo. Nenhuma chave Gemini deve ser criada no mobile nem incluída em `.env` do app.
 
 Consulte [docs/architecture.md](docs/architecture.md) para o fluxo de dados.
 
