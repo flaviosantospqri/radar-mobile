@@ -3,18 +3,18 @@
 ## Scanner ao vivo
 
 1. O usuário concede a permissão e vê a prévia da câmera do aparelho dentro da tela Scanner.
-2. A câmera produz um quadro temporário JPEG. O app o reduz para 768 px e apaga os arquivos do cache após processá-los.
-3. Para cada tentativa, o app pede ao backend autenticado um token Gemini Live de uso único e validade curta e abre uma conexão WebSocket direta com o Gemini. As imagens não passam pelo Render nem pela API RADAR.
-4. A sessão usa a modalidade AUDIO aceita pelo modelo Live nativo e declara a função `report_product_identification`; o Gemini retorna os campos da identificação nos argumentos estruturados dessa função.
-5. Ao receber os argumentos, o app responde à chamada da ferramenta e usa imediatamente a identificação, sem aguardar a geração ou reprodução de áudio. Cada tentativa termina ao fechar a conexão correspondente.
-6. O app normaliza os campos e envia somente o JSON estruturado ao endpoint `POST /api/v1/analyses/live-result`.
-7. O backend valida e grava somente dados estruturados. A tela existente de confirmação, pesquisa de mercado, cálculo e histórico continua sendo usada.
+2. O app pede ao backend autenticado um token Gemini Live de uso único e validade curta e abre uma conexão WebSocket direta por leitura. As imagens não passam pelo Render nem pela API RADAR.
+3. Enquanto mantém a prévia aberta, o app captura quadros JPEG temporários, reduz cada quadro a no máximo 768 px e envia `realtimeInput.video` no máximo uma vez por segundo por até 30 segundos. Apaga cada arquivo local assim que o envio termina.
+4. A sessão usa o modelo `gemini-3.8-live`, modalidade AUDIO e a função não bloqueante `report_product_identification`. As chamadas estruturadas não pausam o envio de quadros.
+5. O app preserva a melhor identificação útil recebida. Se a confiança estiver abaixo de 0,35, a identificação segue para confirmação como hipótese; se não houver candidato útil após 30 segundos, orienta o usuário a enquadrar novamente. Uma falha no token, conexão ou setup é diferenciada e há uma tentativa de reconexão com token novo.
+6. O app normaliza os campos e envia somente o JSON estruturado ao endpoint `POST /api/v1/analyses/live-result`. Campos incertos podem incluir hipóteses com confiança e justificativa em `attributes.suggestions`.
+7. O backend valida e grava somente dados estruturados. A tela existente de confirmação permite editar categoria, tipo, marca, modelo e edição/ano; só então começa a pesquisa de mercado.
 
-O Gemini recebe os quadros para inferência. O RADAR não os armazena em bucket, backend ou PostgreSQL. A chave permanente do Gemini nunca está no app: o backend emite apenas uma credencial Live efêmera vinculada ao modelo e à configuração de identificação.
+O Gemini recebe os quadros para inferência. O RADAR não os armazena em bucket, backend ou PostgreSQL. A chave permanente do Gemini nunca está no app: o backend emite apenas uma credencial Live efêmera vinculada ao modelo e à configuração de identificação. O log de diagnóstico registra apenas etapas, quantidade de quadros e códigos de erro; não registra token, payload de imagem ou conteúdo das identificações.
 
 ## Galeria
 
-A seleção da galeria continua disponível. O app comprime a imagem em cache local, envia o conteúdo diretamente ao Gemini Live e apaga o arquivo derivado depois da resposta. A imagem original continua na biblioteca do usuário e não é copiada para o backend RADAR.
+A seleção da galeria continua disponível. O app comprime a imagem em cache local, envia o conteúdo diretamente ao Gemini Live e apaga o arquivo derivado depois da resposta. A imagem original continua na biblioteca do usuário e não é copiada para o backend RADAR. A resposta parcial também segue para a confirmação.
 
 ## Segredos e ambiente
 

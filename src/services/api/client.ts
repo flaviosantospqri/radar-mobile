@@ -79,6 +79,7 @@ export type GeminiLiveSession = {
       functionDeclarations: {
         name: string;
         description?: string;
+        behavior: "NON_BLOCKING" | "BLOCKING";
         parametersJsonSchema: Record<string, unknown>;
       }[];
     }[];

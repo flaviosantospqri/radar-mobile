@@ -9,44 +9,11 @@ import { theme } from "../../constants/theme";
 import { createGeminiLiveSession, recordLiveIdentification, type LiveIdentification } from "../../services/api/client";
 import { discardLocalImage } from "../../features/images/temp-files";
 import { connectGeminiLive, type GeminiLiveConnection } from "../../features/scanner/gemini-live";
+import { identificationScore, isUsefulIdentification, parseIdentification } from "../../features/scanner/identification";
 
-const MAX_SCAN_FRAMES = 4;
+const MAX_SCAN_DURATION_MS = 30_000;
+const FRAME_INTERVAL_MS = 1_000;
 const MIN_IDENTIFICATION_CONFIDENCE = 0.35;
-
-function parseIdentification(raw: string): LiveIdentification {
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("O Gemini não retornou uma identificação válida.");
-  const value = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  if (typeof value.name !== "string" || !value.name.trim()) throw new Error("O Gemini não conseguiu nomear o produto.");
-  if (typeof value.confidence !== "number" || !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1) {
-    throw new Error("A confiança da identificação veio em formato inválido.");
-  }
-  const textOrNull = (item: unknown, max: number) => typeof item === "string" ? item.slice(0, max) : null;
-  const stringList = (item: unknown, count: number, max: number) => Array.isArray(item)
-    ? item.filter((entry): entry is string => typeof entry === "string").slice(0, count).map((entry) => entry.slice(0, max))
-    : [];
-  return {
-    name: value.name.trim().slice(0, 240),
-    category: textOrNull(value.category, 120),
-    subcategory: textOrNull(value.subcategory, 120),
-    brand: textOrNull(value.brand, 160),
-    model: textOrNull(value.model, 160),
-    version: textOrNull(value.version, 160),
-    description: textOrNull(value.description, 1000),
-    attributes: value.attributes && typeof value.attributes === "object" && !Array.isArray(value.attributes)
-      ? value.attributes as Record<string, unknown> : {},
-    visibleCondition: textOrNull(value.visibleCondition, 500),
-    visibleDefects: stringList(value.visibleDefects, 30, 300),
-    confidence: value.confidence,
-    identifiedInformation: stringList(value.identifiedInformation, 30, 300),
-    uncertainInformation: stringList(value.uncertainInformation, 30, 300),
-    verificationQuestions: stringList(value.verificationQuestions, 20, 300),
-    searchQueries: stringList(value.searchQueries, 5, 240),
-    warnings: stringList(value.warnings, 30, 300),
-  };
-}
 
 async function compressFrame(uri: string, width?: number, height?: number) {
   let imageWidth = width;
@@ -76,10 +43,6 @@ async function compressFrame(uri: string, width?: number, height?: number) {
   return frame;
 }
 
-function isUnknownProduct(result: LiveIdentification) {
-  return result.confidence < MIN_IDENTIFICATION_CONFIDENCE || /produto não identificado|item não identificado/i.test(result.name);
-}
-
 export default function ScannerScreen() {
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [cameraReady, setCameraReady] = useState(false);
@@ -92,6 +55,8 @@ export default function ScannerScreen() {
   const runIdRef = useRef(0);
   const scanningRef = useRef(false);
   const connectionRef = useRef<GeminiLiveConnection | null>(null);
+  const bestIdentificationRef = useRef<LiveIdentification | null>(null);
+  const connectionErrorRef = useRef<Error | null>(null);
   const isFocused = useIsFocused();
 
   const stopLiveScan = useCallback(() => {
@@ -127,15 +92,40 @@ export default function ScannerScreen() {
 
   const saveAndOpenResult = useCallback(async (identification: LiveIdentification, runId: number) => {
     setStatusText("Identificação pronta. Salvando os dados...");
-    const idempotencyKey = `live-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const response = await recordLiveIdentification(identification, idempotencyKey);
-    if (runIdRef.current !== runId) return;
     connectionRef.current?.close();
     connectionRef.current = null;
     scanningRef.current = false;
     setScanning(false);
+    const idempotencyKey = `live-${runId}-${Date.now()}`;
+    const response = await recordLiveIdentification(identification, idempotencyKey);
+    if (runIdRef.current !== runId) return;
     router.push({ pathname: "/analysis/[id]", params: { id: response.data.analysis.id } });
   }, []);
+
+  const openLiveConnection = async (runId: number, onIdentification: (raw: string) => void) => {
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (runIdRef.current !== runId) throw new Error("A leitura foi encerrada.");
+      try {
+        setStatusText(attempt === 1 ? "Solicitando sessão segura ao backend..." : "Tentando nova conexão com o Gemini...");
+        console.info("[RADAR][Gemini Live] session_token_request", { attempt });
+        const session = await createGeminiLiveSession();
+        if (runIdRef.current !== runId) throw new Error("A leitura foi encerrada.");
+        console.info("[RADAR][Gemini Live] session_token_received", { attempt });
+        const liveConnection = await connectGeminiLive(session.data, onIdentification, (error) => {
+          connectionErrorRef.current = error;
+          setStatusText("A conexão com o Gemini foi encerrada. Preparando o melhor resultado disponível...");
+        });
+        console.info("[RADAR][Gemini Live] session_ready", { attempt });
+        return liveConnection;
+      } catch (error) {
+        if (runIdRef.current !== runId) throw error;
+        lastError = error instanceof Error ? error : new Error("Não foi possível iniciar a conexão Gemini.");
+        if (attempt === 1) console.warn("[RADAR][Gemini Live] initial_connection_retry", { reason: "fresh_session" });
+      }
+    }
+    throw lastError ?? new Error("Não foi possível conectar ao Gemini.");
+  };
 
   const startLiveScan = async () => {
     if (cameraError && permission?.granted) {
@@ -159,53 +149,95 @@ export default function ScannerScreen() {
 
     const runId = ++runIdRef.current;
     scanningRef.current = true;
+    bestIdentificationRef.current = null;
+    connectionErrorRef.current = null;
     setScanning(true);
     setStatusText("Abrindo sessão segura com o Gemini...");
     let connection: GeminiLiveConnection | null = null;
+    let resultSaveAttempted = false;
     try {
-      for (let frameNumber = 1; frameNumber <= MAX_SCAN_FRAMES; frameNumber += 1) {
+      const acceptIdentification = (raw: string) => {
         if (runIdRef.current !== runId) return;
-        setStatusText(`Lendo a câmera ao vivo · quadro ${frameNumber} de ${MAX_SCAN_FRAMES}`);
+        try {
+          const candidate = parseIdentification(raw);
+          if (!isUsefulIdentification(candidate)) {
+            console.info("[RADAR][Gemini Live] non_useful_candidate");
+            setStatusText("Ainda não consegui reconhecer o tipo do item. Aponte para ele por alguns instantes...");
+            return;
+          }
+          const previous = bestIdentificationRef.current;
+          if (previous && identificationScore(candidate) <= identificationScore(previous)) return;
+          bestIdentificationRef.current = candidate;
+          console.info("[RADAR][Gemini Live] candidate_updated", { confidence: candidate.confidence });
+          setStatusText(candidate.confidence >= MIN_IDENTIFICATION_CONFIDENCE
+            ? "Produto reconhecido. Finalizando a leitura..."
+            : `Hipótese inicial: ${candidate.name}. Continue apontando para melhorar os detalhes...`);
+        } catch {
+          console.warn("[RADAR][Gemini Live] candidate_rejected", { reason: "invalid_structured_result" });
+        }
+      };
+
+      setStatusText("Conectando ao Gemini para iniciar a leitura ao vivo...");
+      connection = await openLiveConnection(runId, acceptIdentification);
+      connectionRef.current = connection;
+      if (runIdRef.current !== runId) return;
+
+      const scanStartedAt = Date.now();
+      let frameNumber = 0;
+      while (Date.now() - scanStartedAt < MAX_SCAN_DURATION_MS && runIdRef.current === runId) {
+        if (connectionErrorRef.current) break;
+        const frameStartedAt = Date.now();
         const camera = cameraRef.current;
         if (!camera) throw new Error("A câmera foi fechada durante a leitura.");
+        if (runIdRef.current !== runId) return;
         const capture = await camera.takePictureAsync({ quality: 0.55, exif: false });
         let frameUri: string | null = null;
         try {
           const frame = await compressFrame(capture.uri);
           frameUri = frame.uri;
-          setStatusText(`Conectando ao Gemini · quadro ${frameNumber} de ${MAX_SCAN_FRAMES}`);
-          const session = await createGeminiLiveSession();
-          if (runIdRef.current !== runId) return;
-          const frameConnection = await connectGeminiLive(session.data);
-          connection = frameConnection;
-          connectionRef.current = frameConnection;
-          if (runIdRef.current !== runId) {
-            frameConnection.close();
-            return;
-          }
-          let text: string;
-          try {
-            text = await frameConnection.sendFrame(frame.base64!);
-          } finally {
-            frameConnection.close();
-            if (connectionRef.current === frameConnection) connectionRef.current = null;
-            connection = null;
-          }
-          if (runIdRef.current !== runId) return;
-          const identification = parseIdentification(text);
-          if (!isUnknownProduct(identification)) {
-            await saveAndOpenResult(identification, runId);
-            return;
-          }
-          setStatusText("Ainda não reconheci o item. Aproxime ou mostre a marca e o modelo...");
+          if (runIdRef.current !== runId || connectionErrorRef.current) continue;
+          connection?.sendFrame(frame.base64!);
+          frameNumber += 1;
+          setStatusText((current) => current.includes("Hipótese inicial") || current.includes("Produto reconhecido")
+            ? current
+            : `Leitura ao vivo ativa · ${frameNumber} quadro${frameNumber === 1 ? "" : "s"} analisado${frameNumber === 1 ? "" : "s"}`);
         } finally {
           await discardLocalImage(frameUri);
           await discardLocalImage(capture.uri);
         }
+        const best = bestIdentificationRef.current as LiveIdentification | null;
+        if (best && best.confidence >= MIN_IDENTIFICATION_CONFIDENCE) {
+          resultSaveAttempted = true;
+          await saveAndOpenResult(best, runId);
+          return;
+        }
+        const waitMs = Math.min(FRAME_INTERVAL_MS - (Date.now() - frameStartedAt), MAX_SCAN_DURATION_MS - (Date.now() - scanStartedAt));
+        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
-      throw new Error("Não consegui identificar o produto com segurança. Aproxime a câmera e tente novamente.");
+      const best = bestIdentificationRef.current as LiveIdentification | null;
+      if (best) {
+        resultSaveAttempted = true;
+        await saveAndOpenResult(best, runId);
+        return;
+      }
+      if (connectionErrorRef.current) throw connectionErrorRef.current;
+      throw new Error("Não consegui reconhecer o produto nesta imagem. Aproxime a câmera, retire o que estiver cobrindo o item e tente novamente.");
     } catch (error) {
-      if (runIdRef.current === runId) Alert.alert("Leitura não concluída", error instanceof Error ? error.message : "Confira a internet e tente novamente.");
+      if (runIdRef.current === runId) {
+        const message = error instanceof Error ? error.message : "Confira a internet e tente novamente.";
+        const best = bestIdentificationRef.current as LiveIdentification | null;
+        if (!resultSaveAttempted && best) {
+          resultSaveAttempted = true;
+          try {
+            await saveAndOpenResult(best, runId);
+            return;
+          } catch (saveError) {
+            Alert.alert("Não foi possível salvar a identificação", saveError instanceof Error ? saveError.message : "Confira a conexão e tente novamente.");
+            return;
+          }
+        }
+        Alert.alert("Leitura não concluída", message);
+      }
     } finally {
       connection?.close();
       if (connectionRef.current === connection) connectionRef.current = null;
@@ -223,6 +255,7 @@ export default function ScannerScreen() {
     setStatusText("Abrindo a imagem para identificação...");
     let frameUri: string | null = null;
     let connection: GeminiLiveConnection | null = null;
+    let identificationTimeout: ReturnType<typeof setTimeout> | null = null;
     try {
       const selection = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, quality: 1, exif: false });
       if (selection.canceled) return;
@@ -232,14 +265,25 @@ export default function ScannerScreen() {
       frameUri = frame.uri;
       setStatusText("Identificando diretamente com o Gemini...");
       const session = await createGeminiLiveSession();
-      connection = await connectGeminiLive(session.data);
-      const identification = parseIdentification(await connection.sendFrame(frame.base64!));
-      if (isUnknownProduct(identification)) throw new Error("Não identifiquei o produto com segurança. Escolha uma foto mais nítida.");
+      let resolveIdentification!: (raw: string) => void;
+      let rejectIdentification!: (error: Error) => void;
+      const identificationResponse = new Promise<string>((resolve, reject) => {
+        resolveIdentification = resolve;
+        rejectIdentification = reject;
+      });
+      connection = await connectGeminiLive(session.data, resolveIdentification, rejectIdentification);
+      connection.sendFrame(frame.base64!);
+      const timeout = new Promise<never>((_, reject) => {
+        identificationTimeout = setTimeout(() => reject(new Error("O Gemini não concluiu a leitura da foto a tempo. Escolha uma imagem mais nítida e tente novamente.")), MAX_SCAN_DURATION_MS);
+      });
+      const identification = parseIdentification(await Promise.race([identificationResponse, timeout]));
+      if (!isUsefulIdentification(identification)) throw new Error("Não consegui reconhecer o produto nesta foto. Escolha uma imagem mais nítida e tente novamente.");
       const response = await recordLiveIdentification(identification, `gallery-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       router.push({ pathname: "/analysis/[id]", params: { id: response.data.analysis.id } });
     } catch (error) {
       Alert.alert("Identificação não concluída", error instanceof Error ? error.message : "Confira a conexão e tente novamente.");
     } finally {
+      if (identificationTimeout) clearTimeout(identificationTimeout);
       connection?.close();
       await discardLocalImage(frameUri);
       setWorking(false);
@@ -259,7 +303,7 @@ export default function ScannerScreen() {
     <PageTitle
       eyebrow="LEITURA VISUAL AO VIVO"
       title="Aponte para o produto"
-      subtitle="A câmera fica aberta e o Gemini identifica o item enquanto você o enquadra."
+      subtitle="A câmera fica aberta enquanto o Gemini analisa quadros ao vivo por até 30 segundos."
     />
 
     <View style={{ height: 360, borderRadius: 24, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface }}>

@@ -6,6 +6,7 @@ import { Button, Card, Divider, Field, PageTitle, Pill, Screen } from "../../com
 import { money, parseMoneyToCents, percent, theme } from "../../constants/theme";
 import type { AnalysisResult } from "../../types/api";
 import { createOpportunity, confirmIdentification, fetchAnalysis, recalculateAnalysis, researchAnalysis } from "../../services/api/client";
+import { getIdentificationSuggestions, type IdentificationSuggestion } from "../../features/scanner/identification";
 
 const scenarios = ["conservador", "provavel", "otimista"] as const;
 type Scenario = typeof scenarios[number];
@@ -24,6 +25,8 @@ export default function AnalysisDetailScreen() {
   const [brand, setBrand] = useState("");
   const [model, setModel] = useState("");
   const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [version, setVersion] = useState("");
   const [visibleCondition, setVisibleCondition] = useState("");
   const [functionalCondition, setFunctionalCondition] = useState("nao_testado");
   const [askingPrice, setAskingPrice] = useState("");
@@ -39,7 +42,8 @@ export default function AnalysisDetailScreen() {
     if (!product) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate editable identification fields from the API.
     setName(product.name ?? ""); setBrand(product.brand ?? ""); setModel(product.model ?? "");
-    setCategory(product.category ?? ""); setVisibleCondition(product.visibleCondition ?? "");
+    setCategory(product.category ?? ""); setSubcategory(product.subcategory ?? ""); setVersion(product.version ?? "");
+    setVisibleCondition(product.visibleCondition ?? "");
   }, [product]);
   useEffect(() => {
     const finance = result?.profitability;
@@ -56,11 +60,23 @@ export default function AnalysisDetailScreen() {
   const refresh = async () => queryClient.invalidateQueries({ queryKey: ["analysis", id] });
   const comparableRefs = useMemo(() => result?.references.filter((reference) => reference.matchType === "EXATA" || reference.matchType === "ALTA") ?? [], [result?.references]);
   const partialRefs = useMemo(() => result?.references.filter((reference) => reference.matchType === "PARCIAL") ?? [], [result?.references]);
+  const suggestions = useMemo(() => getIdentificationSuggestions(product?.attributes), [product?.attributes]);
+  const applySuggestion = (suggestion: IdentificationSuggestion) => {
+    if (suggestion.field === "category") setCategory(suggestion.value);
+    else if (suggestion.field === "subcategory") setSubcategory(suggestion.value);
+    else if (suggestion.field === "brand") setBrand(suggestion.value);
+    else if (suggestion.field === "model") setModel(suggestion.value);
+    else if (suggestion.field === "version") setVersion(suggestion.value);
+  };
 
   const confirmAndResearch = async () => {
     setBusy(true);
     try {
-      await confirmIdentification(id, { name: name.trim(), brand: brand.trim() || null, model: model.trim() || null, category: category.trim() || null, visibleCondition: visibleCondition.trim() || null, functionalCondition });
+      await confirmIdentification(id, {
+        name: name.trim(), brand: brand.trim() || null, model: model.trim() || null,
+        category: category.trim() || null, subcategory: subcategory.trim() || null,
+        version: version.trim() || null, visibleCondition: visibleCondition.trim() || null, functionalCondition,
+      });
       await researchAnalysis(id);
       await refresh();
     } catch (error: any) {
@@ -109,16 +125,32 @@ export default function AnalysisDetailScreen() {
       <Text style={{ color: theme.colors.muted, fontSize: 13 }}>{[product.category, product.subcategory].filter(Boolean).join(" · ")}</Text>
       {product.visibleCondition ? <Text style={{ color: theme.colors.text, lineHeight: 20 }}>Condição visual: {product.visibleCondition}</Text> : null}
       {product.visibleDefects.length ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>Defeitos aparentes: {product.visibleDefects.join("; ")}</Text> : null}
+      {product.confidenceBps !== null && product.confidenceBps < 3500 ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>Identificação parcial: confira as hipóteses e ajuste os campos antes da pesquisa.</Text> : null}
       {product.uncertainInformation.length ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>Não confirmado: {product.uncertainInformation.join("; ")}</Text> : null}
       {product.warnings.length ? <Text style={{ color: theme.colors.amber, lineHeight: 20 }}>{product.warnings.join("; ")}</Text> : null}
     </Card> : null}
 
     {product && !product.confirmedByUser ? <Card>
       <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Confirme antes da pesquisa</Text>
-      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Corrija nome, marca ou modelo. A pesquisa só começa depois da confirmação.</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 20 }}>Revise os campos. A pesquisa só começa depois da confirmação.</Text>
+      {suggestions.length ? <View style={{ gap: 8 }}>
+        <Text style={{ color: theme.colors.amber, fontSize: 12, fontWeight: "800" }}>HIPÓTESES DO GEMINI · TOQUE PARA USAR</Text>
+        {suggestions.map((suggestion, index) => <Pressable
+          key={`${suggestion.field}-${suggestion.value}-${index}`}
+          onPress={() => applySuggestion(suggestion)}
+          style={{ backgroundColor: theme.colors.elevated, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, padding: 11, gap: 5 }}
+        >
+          <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+            <Text style={{ color: theme.colors.text, flex: 1, fontWeight: "800" }}>{suggestion.value} · {Math.round(suggestion.confidence * 100)}%</Text>
+            <Text style={{ color: theme.colors.green, fontSize: 11, fontWeight: "800" }}>USAR</Text>
+          </View>
+          <Text style={{ color: theme.colors.faint, fontSize: 11 }}>{suggestion.field === "version" ? "EDIÇÃO / ANO" : suggestion.field.toUpperCase()}{suggestion.rationale ? ` · ${suggestion.rationale}` : ""}</Text>
+        </Pressable>)}
+      </View> : null}
       <Field label="NOME DO PRODUTO" value={name} onChangeText={setName} />
       <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="MARCA" value={brand} onChangeText={setBrand} /></View><View style={{ flex: 1 }}><Field label="MODELO" value={model} onChangeText={setModel} /></View></View>
       <Field label="CATEGORIA" value={category} onChangeText={setCategory} />
+      <View style={{ flexDirection: "row", gap: 10 }}><View style={{ flex: 1 }}><Field label="TIPO / SUBCATEGORIA" value={subcategory} onChangeText={setSubcategory} /></View><View style={{ flex: 1 }}><Field label="EDIÇÃO OU ANO" value={version} onChangeText={setVersion} /></View></View>
       <Field label="CONDIÇÃO VISUAL" value={visibleCondition} onChangeText={setVisibleCondition} />
       <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: "700" }}>FUNCIONAMENTO</Text>
       <View style={{ flexDirection: "row", gap: 7, flexWrap: "wrap" }}>{[["funcionando", "Funciona"], ["com_defeito", "Com defeito"], ["nao_testado", "Não testado"], ["nao_aplicavel", "Não se aplica"]].map(([value, label]) => <Pressable key={value} onPress={() => setFunctionalCondition(value)}><Pill label={label.toUpperCase()} tone={functionalCondition === value ? "green" : "muted"} /></Pressable>)}</View>
