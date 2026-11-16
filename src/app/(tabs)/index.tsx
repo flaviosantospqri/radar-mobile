@@ -163,11 +163,6 @@ export default function ScannerScreen() {
     setStatusText("Abrindo sessão segura com o Gemini...");
     let connection: GeminiLiveConnection | null = null;
     try {
-      const session = await createGeminiLiveSession();
-      if (runIdRef.current !== runId) return;
-      connection = await connectGeminiLive(session.data);
-      connectionRef.current = connection;
-
       for (let frameNumber = 1; frameNumber <= MAX_SCAN_FRAMES; frameNumber += 1) {
         if (runIdRef.current !== runId) return;
         setStatusText(`Lendo a câmera ao vivo · quadro ${frameNumber} de ${MAX_SCAN_FRAMES}`);
@@ -178,7 +173,20 @@ export default function ScannerScreen() {
         try {
           const frame = await compressFrame(capture.uri);
           frameUri = frame.uri;
-          const text = await connection.sendFrame(frame.base64!);
+          setStatusText(`Conectando ao Gemini · quadro ${frameNumber} de ${MAX_SCAN_FRAMES}`);
+          const session = await createGeminiLiveSession();
+          if (runIdRef.current !== runId) return;
+          const frameConnection = await connectGeminiLive(session.data);
+          connection = frameConnection;
+          connectionRef.current = frameConnection;
+          if (runIdRef.current !== runId) {
+            frameConnection.close();
+            return;
+          }
+          const text = await frameConnection.sendFrame(frame.base64!);
+          frameConnection.close();
+          if (connectionRef.current === frameConnection) connectionRef.current = null;
+          connection = null;
           if (runIdRef.current !== runId) return;
           const identification = parseIdentification(text);
           if (!isUnknownProduct(identification)) {

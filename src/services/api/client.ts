@@ -75,6 +75,13 @@ export type GeminiLiveSession = {
       mediaResolution: "MEDIA_RESOLUTION_LOW";
     };
     systemInstruction: { parts: { text: string }[] };
+    tools: {
+      functionDeclarations: {
+        name: string;
+        description?: string;
+        parametersJsonSchema: Record<string, unknown>;
+      }[];
+    }[];
   };
   expiresAt: string;
 };

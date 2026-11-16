@@ -3,6 +3,9 @@ import type { GeminiLiveSession } from "../../services/api/client";
 type LiveMessage = {
   setupComplete?: unknown;
   error?: { message?: string; status?: string };
+  toolCall?: {
+    functionCalls?: { id?: string; name?: string; args?: Record<string, unknown> }[];
+  };
   serverContent?: {
     modelTurn?: { parts?: { text?: string }[] };
     turnComplete?: boolean;
@@ -23,7 +26,8 @@ export type GeminiLiveConnection = {
 };
 
 const LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
-const FRAME_PROMPT = "Identifique o produto que aparece nesta imagem agora. Retorne somente o JSON definido nas instruções do sistema.";
+const IDENTIFICATION_TOOL = "report_product_identification";
+const FRAME_PROMPT = `Identifique o produto que aparece nesta imagem agora e chame a função ${IDENTIFICATION_TOOL} com todos os campos exigidos.`;
 
 export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiveConnection> {
   return new Promise((resolve, reject) => {
@@ -108,6 +112,36 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
             try { socket.close(); } catch { /* The socket may already be closed. */ }
           },
         });
+        return;
+      }
+
+      const functionCall = message.toolCall?.functionCalls?.find((call) => call.name === IDENTIFICATION_TOOL);
+      if (functionCall) {
+        if (!pending) return;
+        if (!functionCall.args || typeof functionCall.args !== "object" || Array.isArray(functionCall.args)) {
+          const current = pending;
+          pending = null;
+          clearTimeout(current.timeout);
+          current.reject(new Error("O Gemini retornou uma identificação em formato inválido."));
+          return;
+        }
+        try {
+          socket.send(JSON.stringify({
+            toolResponse: {
+              functionResponses: [{
+                ...(functionCall.id ? { id: functionCall.id } : {}),
+                name: IDENTIFICATION_TOOL,
+                response: { accepted: true },
+              }],
+            },
+          }));
+        } catch {
+          // The structured result is already available; it remains usable if the connection closes here.
+        }
+        const current = pending;
+        pending = null;
+        clearTimeout(current.timeout);
+        current.resolve(JSON.stringify(functionCall.args));
         return;
       }
 

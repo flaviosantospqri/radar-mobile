@@ -27,7 +27,7 @@ O `assembleDebug` depende de um servidor Metro e não deve ser distribuído como
 
 O perfil `preview` em `eas.json` também gera um APK instalável com `npx eas-cli build --platform android --profile preview`. O perfil `production` gera um Android App Bundle.
 
-A mudança do scanner requer uma nova build/instalação do app (versionCode 6). Configure `EXPO_PUBLIC_API_URL` no ambiente de build; a URL é incorporada ao aplicativo. Nenhuma chave Gemini deve ser criada no mobile nem incluída em `.env` do app.
+A mudança do scanner requer uma nova build/instalação do app (versionCode 7). A sessão Live usa saída AUDIO e recebe a identificação estruturada pela função `report_product_identification`, compatível com o modelo Gemini Live configurado no backend. Configure `EXPO_PUBLIC_API_URL` no ambiente de build; a URL é incorporada ao aplicativo. Nenhuma chave Gemini deve ser criada no mobile nem incluída em `.env` do app.
 
 Consulte [docs/architecture.md](docs/architecture.md) para o fluxo de dados.
 
