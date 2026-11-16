@@ -120,6 +120,7 @@ export default function AnalysisDetailScreen() {
 
   const hasResearch = Boolean(result.lastResearch);
   const hasPurchasePrice = result.profitability?.purchasePriceCents !== null && result.profitability?.purchasePriceCents !== undefined;
+  const hasMarketEstimate = result.market.averagePriceCents !== null;
   const recommendation = hasPurchasePrice ? result.analysis.recommendation : null;
   const recTone = recommendation === "COMPRAR" ? "green" : recommendation === "NEGOCIAR" ? "amber" : recommendation === "EVITAR" ? "red" : "muted";
   const analysisStatusLabel = result.analysis.status === "awaiting_confirmation"
@@ -179,15 +180,27 @@ export default function AnalysisDetailScreen() {
     </Card> : null}
 
     {hasResearch ? <Card>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Preço no mercado</Text><Pill label={`${result.market.comparableCount} COMPATÍVEIS`} tone={result.market.comparableCount >= 3 ? "green" : "amber"} /></View>
-      {result.market.comparableCount ? <>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800", flex: 1 }}>Preço no mercado</Text>
+        <Pill label={result.market.comparableCount ? `${result.market.comparableCount} COMPATÍVEIS` : result.market.partialCount ? `${result.market.partialCount} SIMILARES` : hasMarketEstimate ? "ESTIMATIVA INDICATIVA" : "0 COMPATÍVEIS"} tone={result.market.comparableCount >= 3 ? "green" : "amber"} />
+      </View>
+      {hasMarketEstimate ? <>
         <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
-          <PriceMetric label="MÉDIA ANUNCIADA" value={money(result.market.averagePriceCents)} accent />
+          <PriceMetric label={result.market.priceBasis === "grounded_estimate" ? "REVENDA MÉDIA ESTIMADA" : result.market.priceBasis === "similar_listings" ? "MÉDIA DE ITENS SIMILARES" : "MÉDIA ANUNCIADA"} value={money(result.market.averagePriceCents)} accent />
           <PriceMetric label="MEDIANA" value={money(result.market.medianPriceCents)} />
-          <PriceMetric label="FAIXA OBSERVADA" value={`${money(result.market.lowestPriceCents)} – ${money(result.market.highestPriceCents)}`} />
+          <PriceMetric label={result.market.priceBasis === "grounded_estimate" ? "FAIXA INDICATIVA" : "FAIXA OBSERVADA"} value={`${money(result.market.lowestPriceCents)} – ${money(result.market.highestPriceCents)}`} />
         </View>
-        <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 17 }}>Consulta em {result.market.collectedAt ? new Date(result.market.collectedAt).toLocaleString("pt-BR") : "—"} · {result.market.sourceNames.join(", ")}. São preços anunciados, não vendas confirmadas; marca, edição e conservação podem alterar o valor.</Text>
-      </> : <Text style={{ color: result.lastResearch?.status === "failed" ? theme.colors.amber : theme.colors.muted, lineHeight: 20 }}>{result.lastResearch?.status === "failed" ? "A consulta ao mercado não terminou. Tente novamente ou refine a identificação." : "Não encontramos anúncios compatíveis com essa identificação. Refine marca, modelo ou categoria e pesquise novamente."}</Text>}
+        <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 17 }}>
+          {result.market.priceBasis === "grounded_estimate"
+            ? `Estimativa do Gemini baseada em resultados públicos da web${result.market.collectedAt ? ` · ${new Date(result.market.collectedAt).toLocaleString("pt-BR")}` : ""}. Não são vendas confirmadas; edição, conservação e funcionamento podem mudar o valor.`
+            : `${result.market.sourceNames.join(", ")} · ${result.market.collectedAt ? new Date(result.market.collectedAt).toLocaleString("pt-BR") : "—"}. São preços anunciados, não vendas confirmadas; edição, conservação e funcionamento podem mudar o valor.`}
+        </Text>
+        {result.market.estimateNote ? <Text style={{ color: theme.colors.amber, fontSize: 12, lineHeight: 18 }}>{result.market.estimateNote}</Text> : null}
+        {result.market.estimateSources.length ? <View style={{ gap: 6 }}>
+          <Text style={{ color: theme.colors.faint, fontSize: 10, fontWeight: "800" }}>FONTES DA ESTIMATIVA</Text>
+          {result.market.estimateSources.slice(0, 3).map((source) => <Pressable key={source.url} onPress={() => void Linking.openURL(source.url)}><Text numberOfLines={2} style={{ color: theme.colors.green, fontSize: 11, textDecorationLine: "underline" }}>{source.title}</Text></Pressable>)}
+        </View> : null}
+      </> : <Text style={{ color: result.lastResearch?.status === "failed" ? theme.colors.amber : theme.colors.muted, lineHeight: 20 }}>{result.lastResearch?.status === "failed" ? "A consulta ao mercado não terminou. Tente novamente ou refine a identificação." : "Não encontramos preços verificáveis para essa identificação. Tente novamente ou refine os dados do produto."}</Text>}
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}><Text style={{ color: theme.colors.muted, fontSize: 12 }}>Liquidez aparente</Text><Pill label={result.market.liquidity} tone={result.market.liquidity === "ALTA" ? "green" : result.market.liquidity === "INSUFICIENTE" ? "muted" : "amber"} /></View>
       <Text style={{ color: theme.colors.faint, fontSize: 11, lineHeight: 17 }}>A quantidade de anúncios não mede compradores nem velocidade de venda. Nível: {percent(result.market.researchConfidenceBps)} de cobertura das referências.</Text>
       {partialRefs.length ? <>
@@ -197,7 +210,7 @@ export default function AnalysisDetailScreen() {
       {comparableRefs.slice(0, 8).map((reference) => <MarketRow key={reference.id} reference={reference} />)}
     </Card> : null}
 
-    {hasResearch && result.market.comparableCount > 0 ? <Card>
+    {hasResearch && hasMarketEstimate ? <Card>
       <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>{hasPurchasePrice ? "Resultado financeiro" : "Quanto vale a pena pagar?"}</Text>
       {hasPurchasePrice ? <>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>{recommendation ? <Pill label={recommendation} tone={recTone} /> : null}<Text style={{ color: theme.colors.faint, fontSize: 11 }}>Cenário {scenario}</Text></View>
@@ -215,10 +228,10 @@ export default function AnalysisDetailScreen() {
         </View>
         <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>Sem o preço pedido, não dá para calcular seu lucro líquido. Esse teto mostra quanto pagar no máximo, considerando taxas, custos e metas configurados. O preço pedido é opcional.</Text>
       </>}
-      <Text style={{ color: theme.colors.faint, fontSize: 11 }}>A estimativa usa anúncios ativos semelhantes e pode variar conforme a identificação e a condição real do item.</Text>
+      <Text style={{ color: theme.colors.faint, fontSize: 11 }}>{result.market.priceBasis === "grounded_estimate" ? "O teto foi calculado sobre uma faixa indicativa da web, com menor confiança que anúncios comparáveis. Confirme a versão e o estado do produto antes de comprar." : "A estimativa usa anúncios ativos semelhantes e pode variar conforme a identificação e a condição real do item."}</Text>
     </Card> : null}
 
-    {hasResearch && result.market.comparableCount > 0 ? <Card>
+    {hasResearch && hasMarketEstimate ? <Card>
       <Text style={{ color: theme.colors.text, fontSize: 16, fontWeight: "800" }}>Quer calcular seu lucro?</Text>
       <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>Opcional. Informe o valor que o vendedor pediu para comparar com o mercado.</Text>
       <Field label="PREÇO PEDIDO (OPCIONAL)" keyboardType="decimal-pad" value={askingPrice} onChangeText={setAskingPrice} placeholder="Ex.: 50,00" />

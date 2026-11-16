@@ -30,7 +30,9 @@ export type AnalysisResult = {
     comparableCount: number; partialCount: number; averagePriceCents: number | null; lowestPriceCents: number | null; q25PriceCents: number | null;
     medianPriceCents: number | null; q75PriceCents: number | null; highestPriceCents: number | null;
     partialMedianPriceCents: number | null; liquidity: Liquidity; researchConfidenceBps: number;
-    collectedAt: string | null; isActiveListingData: true; representsCompletedSales: false; sourceNames: string[];
+    priceBasis: "active_listings" | "similar_listings" | "grounded_estimate" | "none";
+    estimateNote: string | null; estimateSources: { title: string; url: string }[];
+    collectedAt: string | null; isActiveListingData: boolean; representsCompletedSales: false; sourceNames: string[];
   };
   references: MarketReference[];
   profitability: null | {

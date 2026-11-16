@@ -1,0 +1,23 @@
+diff --git a/node_modules/react-native-gesture-handler/android/CMakeLists.txt b/node_modules/react-native-gesture-handler/android/CMakeLists.txt
+--- a/node_modules/react-native-gesture-handler/android/CMakeLists.txt
++++ b/node_modules/react-native-gesture-handler/android/CMakeLists.txt
+@@ -4,7 +4,12 @@ project(GestureHandlerCodegen)
+ set(CMAKE_VERBOSE_MAKEFILE on)
+ set(CMAKE_CXX_STANDARD 20)
+ 
+-file(GLOB_RECURSE rn_gesture_handler_SRCS CONFIGURE_DEPENDS ./build/generated/source/codegen/jni/shared/shadowNodes/*.cpp)
++configure_file(
++  ../shared/shadowNodes/react/renderer/components/rngesturehandler_codegen/RNGestureHandlerDetectorShadowNode.cpp
++  ${CMAKE_CURRENT_BINARY_DIR}/RNGestureHandlerDetectorShadowNode.cpp
++  COPYONLY
++)
++set(rn_gesture_handler_SRCS ${CMAKE_CURRENT_BINARY_DIR}/RNGestureHandlerDetectorShadowNode.cpp)
+ file(GLOB rn_gesture_handler_codegen_SRCS CONFIGURE_DEPENDS ./build/generated/source/codegen/jni/*.cpp ./build/generated/source/codegen/jni/react/renderer/components/rngesturehandler_codegen/*.cpp)
+ 
+ add_library(
+@@ -19,4 +24,5 @@ if(ReactAndroid_VERSION_MINOR GREATER_EQUAL 80)
+ endif()
+ 
+ target_include_directories(react_codegen_rngesturehandler_codegen PUBLIC ../shared/shadowNodes)
++target_include_directories(react_codegen_rngesturehandler_codegen PUBLIC ../shared/shadowNodes/react/renderer/components/rngesturehandler_codegen)
+ target_include_directories(react_codegen_rngesturehandler_codegen PUBLIC ./build/generated/source/codegen/jni)

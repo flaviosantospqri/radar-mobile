@@ -19,6 +19,8 @@ O Gemini recebe os quadros para inferência. Eles não são armazenados pelo RAD
 
 A conexão direta ao Gemini exige internet. Se a conexão ou a configuração inicial falhar, o app solicita uma sessão nova e repete a tentativa uma vez. Se não houver uma identificação útil ao final de 30 segundos, o app orienta a aproximar a câmera e tentar novamente. Nenhuma imagem entra em uma fila persistente.
 
+Após a identificação, a pesquisa de mercado tenta anúncios do Mercado Livre e usa Gemini com Google Search grounding caso a busca seja bloqueada ou não encontre comparáveis. A tela sempre mostra a média disponível e, sem preço pedido, o teto de compra calculado com custos e metas da conta. Uma faixa indicativa baseada em resultados públicos é marcada com menor confiança e exibe suas fontes.
+
 ## Build Android
 
 Para gerar localmente um APK independente, que abre sem Metro e inclui o bundle JavaScript, use `cd android; .\\gradlew.bat assembleRelease`. O APK é assinado com a chave debug do template e serve para instalação/teste; para publicar na Play Store, configure uma chave de assinatura própria e gere o App Bundle.
