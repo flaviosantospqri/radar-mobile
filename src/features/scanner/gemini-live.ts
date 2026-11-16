@@ -15,7 +15,6 @@ type LiveMessage = {
 
 type PendingTurn = {
   text: string;
-  result?: string;
   resolve: (text: string) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -82,7 +81,7 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
                 if (!pending) return;
                 pending = null;
                 turnReject(new Error("O Gemini demorou para identificar este quadro. Tente novamente."));
-              }, 25_000);
+              }, 45_000);
               pending = { text: "", resolve: turnResolve, reject: turnReject, timeout };
               try {
                 socket.send(JSON.stringify({
@@ -137,14 +136,12 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
               }],
             },
           }));
-        } catch {
-          const current = pending;
-          pending = null;
-          clearTimeout(current.timeout);
-          current.resolve(result);
-          return;
-        }
-        pending.result = result;
+        } catch { /* The structured result is still usable if the socket closes. */ }
+        const current = pending;
+        pending = null;
+        clearTimeout(current.timeout);
+        current.resolve(result);
+        return;
       }
 
       const serverContent = message.serverContent;
@@ -163,7 +160,7 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
         const current = pending;
         pending = null;
         clearTimeout(current.timeout);
-        current.resolve(current.result ?? current.text);
+        current.resolve(current.text);
       }
     };
 
