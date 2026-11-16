@@ -47,7 +47,11 @@ export function parseIdentification(raw: string): LiveIdentification {
   let name = value.name.trim().slice(0, 240);
   if (unknownName.test(name)) {
     const broadSuggestion = suggestions.find((suggestion) => suggestion.field === "subcategory" || suggestion.field === "category");
-    if (broadSuggestion) name = `${broadSuggestion.value} (hipótese)`;
+    const broadLabel = broadSuggestion?.value
+      ?? textOrNull(value.subcategory, 120)
+      ?? textOrNull(value.category, 120)
+      ?? (typeof value.brand === "string" && value.brand.trim() ? `Produto ${value.brand.trim()}` : null);
+    if (broadLabel) name = `${broadLabel} (hipótese)`;
   }
   return {
     name,
@@ -71,6 +75,58 @@ export function parseIdentification(raw: string): LiveIdentification {
 
 export function isUsefulIdentification(result: LiveIdentification) {
   return result.name.trim().length > 2 && !unknownName.test(result.name);
+}
+
+export function mergeIdentifications(previous: LiveIdentification | null, incoming: LiveIdentification): LiveIdentification {
+  if (!previous) return incoming;
+  const incomingIsStronger = incoming.confidence >= previous.confidence;
+  const mergeText = (current: string | null, next: string | null) => {
+    if (!next?.trim()) return current;
+    if (!current?.trim() || current.trim() === next.trim() || incomingIsStronger) return next;
+    return current;
+  };
+  const name = unknownName.test(previous.name) || previous.name.includes("(hipótese)") && !incoming.name.includes("(hipótese)") || incomingIsStronger
+    ? incoming.name
+    : previous.name;
+  const category = mergeText(previous.category, incoming.category);
+  const subcategory = mergeText(previous.subcategory, incoming.subcategory);
+  const brand = mergeText(previous.brand, incoming.brand);
+  const model = mergeText(previous.model, incoming.model);
+  const version = mergeText(previous.version, incoming.version);
+  const resolvedFields = new Set(
+    [category && "category", subcategory && "subcategory", brand && "brand", model && "model", version && "version"]
+      .filter((field): field is string => Boolean(field)),
+  );
+  const suggestionByField = new Map<string, IdentificationSuggestion>();
+  for (const suggestion of [...getIdentificationSuggestions(previous.attributes), ...getIdentificationSuggestions(incoming.attributes)]) {
+    if (resolvedFields.has(suggestion.field)) continue;
+    const current = suggestionByField.get(suggestion.field);
+    if (!current || suggestion.confidence > current.confidence || incomingIsStronger) suggestionByField.set(suggestion.field, suggestion);
+  }
+  const combine = (current: string[], next: string[], max: number) => [...new Set([...current, ...next])].slice(0, max);
+  return {
+    ...previous,
+    name,
+    category,
+    subcategory,
+    brand,
+    model,
+    version,
+    description: mergeText(previous.description, incoming.description),
+    attributes: {
+      ...(incomingIsStronger ? previous.attributes : incoming.attributes),
+      ...(incomingIsStronger ? incoming.attributes : previous.attributes),
+      suggestions: [...suggestionByField.values()],
+    },
+    visibleCondition: mergeText(previous.visibleCondition, incoming.visibleCondition),
+    visibleDefects: combine(previous.visibleDefects, incoming.visibleDefects, 30),
+    confidence: Math.max(previous.confidence, incoming.confidence),
+    identifiedInformation: combine(previous.identifiedInformation, incoming.identifiedInformation, 30),
+    uncertainInformation: combine(incomingIsStronger ? [] : previous.uncertainInformation, incoming.uncertainInformation, 30),
+    verificationQuestions: combine(previous.verificationQuestions, incoming.verificationQuestions, 20),
+    searchQueries: combine(incomingIsStronger ? [] : previous.searchQueries, incoming.searchQueries, 5),
+    warnings: combine(previous.warnings, incoming.warnings, 30),
+  };
 }
 
 export function identificationScore(result: LiveIdentification) {

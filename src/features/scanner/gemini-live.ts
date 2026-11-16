@@ -14,13 +14,13 @@ type LiveMessage = {
 };
 
 export type GeminiLiveConnection = {
-  sendFrame: (base64Jpeg: string) => void;
+  sendFrame: (base64Jpeg: string, requestIdentification?: boolean) => void;
   close: () => void;
 };
 
 const LIVE_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 const IDENTIFICATION_TOOL = "report_product_identification";
-const START_PROMPT = "Comece a identificar o produto central pelos próximos quadros. Quando tiver uma hipótese útil, envie-a pela função estruturada; aceite incerteza e continue observando para melhorar a resposta.";
+const IDENTIFICATION_PROMPT = "Analise os quadros da câmera recebidos até agora e chame report_product_identification agora com sua melhor identificação estruturada. Se não souber marca, modelo, ano ou edição, forneça uma hipótese ampla útil em attributes.suggestions. Não espere novos quadros para responder.";
 const SETUP_TIMEOUT_MS = 20_000;
 
 function diagnostic(event: string, detail?: Record<string, unknown>) {
@@ -77,21 +77,21 @@ export function connectGeminiLive(
       }
       if (message.setupComplete) {
         if (connected || closed) return;
-        try {
-          socket.send(JSON.stringify({ realtimeInput: { text: START_PROMPT } }));
-        } catch {
-          fail(new Error("Não foi possível iniciar a leitura com o Gemini."));
-          return;
-        }
         connected = true;
         clearTimeout(setupTimeout);
         diagnostic("setup_complete");
         resolve({
-          sendFrame(base64Jpeg) {
+          sendFrame(base64Jpeg, requestIdentification = false) {
             if (closed || socket.readyState !== WebSocket.OPEN) throw new Error("A sessão visual foi encerrada.");
             socket.send(JSON.stringify({ realtimeInput: { video: { mimeType: "image/jpeg", data: base64Jpeg } } }));
             frameCount += 1;
             diagnostic("video_frame_sent", { count: frameCount });
+            if (requestIdentification) {
+              // Video frames are streamed as transient input, but do not by themselves start a reasoning turn.
+              // Prompt after the frame so Gemini has visual context when the turn begins.
+              socket.send(JSON.stringify({ realtimeInput: { text: IDENTIFICATION_PROMPT } }));
+              diagnostic("identification_prompt_sent", { frame: frameCount });
+            }
           },
           close() {
             if (closed) return;

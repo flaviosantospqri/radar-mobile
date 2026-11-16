@@ -9,11 +9,12 @@ import { theme } from "../../constants/theme";
 import { createGeminiLiveSession, recordLiveIdentification, type LiveIdentification } from "../../services/api/client";
 import { discardLocalImage } from "../../features/images/temp-files";
 import { connectGeminiLive, type GeminiLiveConnection } from "../../features/scanner/gemini-live";
-import { identificationScore, isUsefulIdentification, parseIdentification } from "../../features/scanner/identification";
+import { identificationScore, isUsefulIdentification, mergeIdentifications, parseIdentification } from "../../features/scanner/identification";
 
 const MAX_SCAN_DURATION_MS = 30_000;
 const FRAME_INTERVAL_MS = 1_000;
-const MIN_IDENTIFICATION_CONFIDENCE = 0.35;
+const IDENTIFICATION_PROMPT_INTERVAL_FRAMES = 3;
+const CANDIDATE_REFINEMENT_MS = 7_000;
 
 async function compressFrame(uri: string, width?: number, height?: number) {
   let imageWidth = width;
@@ -51,11 +52,13 @@ export default function ScannerScreen() {
   const [scanning, setScanning] = useState(false);
   const [working, setWorking] = useState(false);
   const [statusText, setStatusText] = useState("");
+  const [liveIdentification, setLiveIdentification] = useState<LiveIdentification | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const runIdRef = useRef(0);
   const scanningRef = useRef(false);
   const connectionRef = useRef<GeminiLiveConnection | null>(null);
   const bestIdentificationRef = useRef<LiveIdentification | null>(null);
+  const firstUsefulCandidateAtRef = useRef<number | null>(null);
   const connectionErrorRef = useRef<Error | null>(null);
   const isFocused = useIsFocused();
 
@@ -107,11 +110,12 @@ export default function ScannerScreen() {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (runIdRef.current !== runId) throw new Error("A leitura foi encerrada.");
       try {
-        setStatusText(attempt === 1 ? "Solicitando sessão segura ao backend..." : "Tentando nova conexão com o Gemini...");
+        setStatusText(attempt === 1 ? "Preparando conexão segura com o Gemini..." : "Renovando conexão com o Gemini...");
         console.info("[RADAR][Gemini Live] session_token_request", { attempt });
         const session = await createGeminiLiveSession();
         if (runIdRef.current !== runId) throw new Error("A leitura foi encerrada.");
         console.info("[RADAR][Gemini Live] session_token_received", { attempt });
+        setStatusText("Sessão segura pronta. Conectando a câmera diretamente ao Gemini...");
         const liveConnection = await connectGeminiLive(session.data, onIdentification, (error) => {
           connectionErrorRef.current = error;
           setStatusText("A conexão com o Gemini foi encerrada. Preparando o melhor resultado disponível...");
@@ -150,9 +154,11 @@ export default function ScannerScreen() {
     const runId = ++runIdRef.current;
     scanningRef.current = true;
     bestIdentificationRef.current = null;
+    firstUsefulCandidateAtRef.current = null;
+    setLiveIdentification(null);
     connectionErrorRef.current = null;
     setScanning(true);
-    setStatusText("Abrindo sessão segura com o Gemini...");
+    setStatusText("Preparando a leitura ao vivo...");
     let connection: GeminiLiveConnection | null = null;
     let resultSaveAttempted = false;
     try {
@@ -166,12 +172,17 @@ export default function ScannerScreen() {
             return;
           }
           const previous = bestIdentificationRef.current;
-          if (previous && identificationScore(candidate) <= identificationScore(previous)) return;
-          bestIdentificationRef.current = candidate;
-          console.info("[RADAR][Gemini Live] candidate_updated", { confidence: candidate.confidence });
-          setStatusText(candidate.confidence >= MIN_IDENTIFICATION_CONFIDENCE
-            ? "Produto reconhecido. Finalizando a leitura..."
-            : `Hipótese inicial: ${candidate.name}. Continue apontando para melhorar os detalhes...`);
+          const merged = mergeIdentifications(previous, candidate);
+          if (!isUsefulIdentification(merged)) return;
+          if (!previous) firstUsefulCandidateAtRef.current = Date.now();
+          if (previous && identificationScore(merged) < identificationScore(previous)) return;
+          bestIdentificationRef.current = merged;
+          setLiveIdentification(merged);
+          console.info("[RADAR][Gemini Live] structured_json_updated", {
+            confidence: merged.confidence,
+            identifiedFields: [merged.category, merged.subcategory, merged.brand, merged.model, merged.version].filter(Boolean).length,
+          });
+          setStatusText(`JSON atualizado · ${merged.name} · ${Math.round(merged.confidence * 100)}% de confiança`);
         } catch {
           console.warn("[RADAR][Gemini Live] candidate_rejected", { reason: "invalid_structured_result" });
         }
@@ -196,17 +207,23 @@ export default function ScannerScreen() {
           const frame = await compressFrame(capture.uri);
           frameUri = frame.uri;
           if (runIdRef.current !== runId || connectionErrorRef.current) continue;
-          connection?.sendFrame(frame.base64!);
-          frameNumber += 1;
+          const nextFrameNumber = frameNumber + 1;
+          const requestIdentification = nextFrameNumber === 1 || (nextFrameNumber - 1) % IDENTIFICATION_PROMPT_INTERVAL_FRAMES === 0;
+          connection?.sendFrame(frame.base64!, requestIdentification);
+          frameNumber = nextFrameNumber;
           setStatusText((current) => current.includes("Hipótese inicial") || current.includes("Produto reconhecido")
             ? current
-            : `Leitura ao vivo ativa · ${frameNumber} quadro${frameNumber === 1 ? "" : "s"} analisado${frameNumber === 1 ? "" : "s"}`);
+            : requestIdentification
+              ? `Gemini analisando o produto · ${frameNumber} quadros enviados`
+              : `Leitura ao vivo ativa · ${frameNumber} quadros enviados`);
         } finally {
           await discardLocalImage(frameUri);
           await discardLocalImage(capture.uri);
         }
         const best = bestIdentificationRef.current as LiveIdentification | null;
-        if (best && best.confidence >= MIN_IDENTIFICATION_CONFIDENCE) {
+        const refinementWindowElapsed = Boolean(best && firstUsefulCandidateAtRef.current
+          && Date.now() - firstUsefulCandidateAtRef.current >= CANDIDATE_REFINEMENT_MS);
+        if (best && refinementWindowElapsed) {
           resultSaveAttempted = true;
           await saveAndOpenResult(best, runId);
           return;
@@ -272,7 +289,7 @@ export default function ScannerScreen() {
         rejectIdentification = reject;
       });
       connection = await connectGeminiLive(session.data, resolveIdentification, rejectIdentification);
-      connection.sendFrame(frame.base64!);
+      connection.sendFrame(frame.base64!, true);
       const timeout = new Promise<never>((_, reject) => {
         identificationTimeout = setTimeout(() => reject(new Error("O Gemini não concluiu a leitura da foto a tempo. Escolha uma imagem mais nítida e tente novamente.")), MAX_SCAN_DURATION_MS);
       });
@@ -303,7 +320,7 @@ export default function ScannerScreen() {
     <PageTitle
       eyebrow="LEITURA VISUAL AO VIVO"
       title="Aponte para o produto"
-      subtitle="A câmera fica aberta enquanto o Gemini analisa quadros ao vivo por até 30 segundos."
+      subtitle="O Gemini preenche a identificação enquanto você enquadra. O JSON vai ao RADAR para pesquisar o mercado."
     />
 
     <View style={{ height: 360, borderRadius: 24, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface }}>
@@ -337,6 +354,27 @@ export default function ScannerScreen() {
         style={{ flex: 1.5 }}
       />
     </View>
+
+    {scanning ? <Card style={{ gap: 8 }}>
+      <Text style={{ color: theme.colors.text, fontWeight: "800", fontSize: 14 }}>JSON do produto ao vivo</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 18 }}>
+        {liveIdentification ? "Os campos são atualizados conforme o Gemini reconhece novos detalhes." : "A câmera está enviando quadros diretamente ao Gemini; o primeiro JSON estruturado aparecerá aqui."}
+      </Text>
+      <View style={{ backgroundColor: theme.colors.background, borderRadius: 12, padding: 12 }}>
+        <Text selectable style={{ color: liveIdentification ? theme.colors.green : theme.colors.faint, fontSize: 11, lineHeight: 17, fontFamily: "monospace" }}>
+          {JSON.stringify(liveIdentification ? {
+            name: liveIdentification.name,
+            category: liveIdentification.category,
+            subcategory: liveIdentification.subcategory,
+            brand: liveIdentification.brand,
+            model: liveIdentification.model,
+            version: liveIdentification.version,
+            confidence: liveIdentification.confidence,
+            suggestions: liveIdentification.attributes.suggestions ?? [],
+          } : { status: "observando", name: null, category: null, brand: null, model: null, version: null }, null, 2)}
+        </Text>
+      </View>
+    </Card> : null}
 
     <Card style={{ gap: 9 }}>
       <Text style={{ color: theme.colors.text, fontWeight: "800", fontSize: 14 }}>Sem envio de foto ao backend</Text>
