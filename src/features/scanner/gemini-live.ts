@@ -32,20 +32,43 @@ function diagnostic(event: string, detail?: Record<string, unknown>) {
 async function readSocketMessage(data: unknown): Promise<string> {
   if (typeof data === "string") return data;
 
-  let blob: Blob;
-  if (typeof Blob !== "undefined" && data instanceof Blob) blob = data;
-  else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) blob = new Blob([data as BlobPart]);
-  else throw new Error("O Gemini retornou um quadro de mensagem incompatível.");
+  if (data instanceof ArrayBuffer) return decodeUtf8(new Uint8Array(data));
+  if (ArrayBuffer.isView(data)) {
+    return decodeUtf8(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  }
+  if (typeof Blob === "undefined" || !(data instanceof Blob)) {
+    throw new Error("O Gemini retornou um quadro de mensagem incompatível.");
+  }
 
-  if (typeof blob.text === "function") return blob.text();
+  if (typeof data.text === "function") return data.text();
+  if (typeof FileReader === "undefined") throw new Error("Este aparelho não consegue ler a resposta binária do Gemini.");
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => typeof reader.result === "string"
       ? resolve(reader.result)
       : reject(new Error("Não foi possível decodificar a resposta do Gemini."));
     reader.onerror = () => reject(new Error("Não foi possível ler a resposta binária do Gemini."));
-    reader.readAsText(blob);
+    reader.readAsText(data);
   });
+}
+
+function decodeUtf8(bytes: Uint8Array): string {
+  if (typeof TextDecoder !== "undefined") return new TextDecoder("utf-8").decode(bytes);
+
+  // React Native's Blob constructor does not accept ArrayBuffer parts. Decode
+  // the WebSocket bytes directly instead of wrapping them in a Blob.
+  let encoded = "";
+  for (const byte of bytes) encoded += `%${byte.toString(16).padStart(2, "0")}`;
+  try { return decodeURIComponent(encoded); }
+  catch { throw new Error("A resposta binária do Gemini não contém UTF-8 válido."); }
+}
+
+function socketDataType(data: unknown): string {
+  if (typeof data === "string") return "string";
+  if (data instanceof ArrayBuffer) return `arraybuffer:${data.byteLength}`;
+  if (ArrayBuffer.isView(data)) return `arraybuffer-view:${data.byteLength}`;
+  if (typeof Blob !== "undefined" && data instanceof Blob) return `blob:${data.size}`;
+  return typeof data;
 }
 
 export function connectGeminiLive(
@@ -94,9 +117,12 @@ export function connectGeminiLive(
     const handleMessage = async (data: unknown) => {
       let message: LiveMessage;
       try { message = JSON.parse(await readSocketMessage(data)) as LiveMessage; }
-      catch {
-        const isBlob = typeof Blob !== "undefined" && data instanceof Blob;
-        diagnostic("invalid_server_message", { dataType: data instanceof ArrayBuffer ? "arraybuffer" : isBlob ? "blob" : typeof data });
+      catch (error) {
+        diagnostic("invalid_server_message", {
+          dataType: socketDataType(data),
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        if (!connected) fail(new Error("Não foi possível interpretar a resposta de configuração do Gemini."));
         return;
       }
 
