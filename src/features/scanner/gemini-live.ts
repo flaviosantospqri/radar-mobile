@@ -15,6 +15,7 @@ type LiveMessage = {
 
 type PendingTurn = {
   text: string;
+  result?: string;
   resolve: (text: string) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -125,6 +126,7 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
           current.reject(new Error("O Gemini retornou uma identificação em formato inválido."));
           return;
         }
+        const result = JSON.stringify(functionCall.args);
         try {
           socket.send(JSON.stringify({
             toolResponse: {
@@ -136,13 +138,13 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
             },
           }));
         } catch {
-          // The structured result is already available; it remains usable if the connection closes here.
+          const current = pending;
+          pending = null;
+          clearTimeout(current.timeout);
+          current.resolve(result);
+          return;
         }
-        const current = pending;
-        pending = null;
-        clearTimeout(current.timeout);
-        current.resolve(JSON.stringify(functionCall.args));
-        return;
+        pending.result = result;
       }
 
       const serverContent = message.serverContent;
@@ -161,7 +163,7 @@ export function connectGeminiLive(session: GeminiLiveSession): Promise<GeminiLiv
         const current = pending;
         pending = null;
         clearTimeout(current.timeout);
-        current.resolve(current.text);
+        current.resolve(current.result ?? current.text);
       }
     };
 
